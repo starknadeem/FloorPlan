@@ -25,6 +25,11 @@ function FixtureItem({
   const base = f.baseHeight ?? 0;
   const [w, d] = f.footprint;
   const modelDef = resolveModel(f.category, f.modelKey);
+  // Umbrellas carry a big (~4 m) shade footprint; keep the clickable/selection box to the
+  // actual canopy so it doesn't blanket the terrace or steal clicks from tables beneath it.
+  const cap = f.category === "umbrella" ? 2.6 : Infinity;
+  const hw = Math.min(Math.max(w, 0.1), cap);
+  const hd = Math.min(Math.max(d, 0.1), cap);
 
   return (
     <group
@@ -46,21 +51,21 @@ function FixtureItem({
     >
       {modelDef ? (
         <Suspense fallback={<FurnitureModel f={f} pal={pal} />}>
-          <ModelFixture def={modelDef} footprint={f.footprint} />
+          <ModelFixture def={modelDef} footprint={f.footprint} category={f.category} />
         </Suspense>
       ) : (
         <FurnitureModel f={f} pal={pal} />
       )}
 
-      {/* transparent hit box covering the whole footprint for easy selection */}
+      {/* transparent hit box for easy selection (clamped for umbrellas) */}
       <mesh position={[0, h / 2, 0]}>
-        <boxGeometry args={[Math.max(w, 0.1), Math.max(h, 0.1), Math.max(d, 0.1)]} />
+        <boxGeometry args={[hw, Math.max(h, 0.1), hd]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
       {(selected || hovered) && (
         <mesh position={[0, h / 2, 0]}>
-          <boxGeometry args={[w + 0.06, h + 0.06, d + 0.06]} />
+          <boxGeometry args={[hw + 0.06, h + 0.06, hd + 0.06]} />
           <meshBasicMaterial color={selected ? "#ffcf66" : "#ffe4a0"} wireframe />
         </mesh>
       )}

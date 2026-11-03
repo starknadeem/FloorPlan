@@ -5,7 +5,41 @@ import * as THREE from "three";
 import type { Fixture } from "@/types/cafescene";
 import { fixtureHeight } from "@/lib/geometry";
 import type { StylePalette } from "@/lib/design/palette";
-import { woodTexture } from "@/lib/design/textures";
+import { woodTexture, pbr, brandLogo, type PbrName } from "@/lib/design/textures";
+
+/** Box clad in a real CC0 PBR material (terrazzo/marble/wood/concrete/fabric). */
+function PbrBox({
+  p, s, mat, tiles = 0.6, color = "#ffffff", roughness = 1,
+}: {
+  p: [number, number, number];
+  s: [number, number, number];
+  mat: PbrName;
+  tiles?: number;
+  color?: string;
+  roughness?: number;
+}) {
+  const [w, h, d] = s;
+  // floor of ~1 so small pieces (e.g. a table top) show the full material, not a zoomed-in patch
+  const maps = pbr(mat, Math.max(0.9, w * tiles), Math.max(0.9, Math.max(h, d) * tiles));
+  return (
+    <mesh position={p} castShadow receiveShadow>
+      <boxGeometry args={s} />
+      <meshStandardMaterial map={maps.map} normalMap={maps.normalMap} roughnessMap={maps.roughnessMap} color={color} roughness={roughness} metalness={0} />
+    </mesh>
+  );
+}
+
+/** The Coffee Berry wordmark on a flat plane, facing local -Z (the fixture's "front"). */
+function LogoPlane({ p, w, ink = "#1a1614" }: { p: [number, number, number]; w: number; ink?: string }) {
+  const tex = brandLogo();
+  const h = w / 2.33; // logo aspect ≈ 2.33:1
+  return (
+    <mesh position={p} rotation={[0, Math.PI, 0]}>
+      <planeGeometry args={[w, h]} />
+      <meshStandardMaterial map={tex} transparent alphaTest={0.35} color={ink} emissive={ink} emissiveIntensity={0.18} roughness={0.6} side={THREE.DoubleSide} />
+    </mesh>
+  );
+}
 
 /* ---- primitive helpers ------------------------------------------------------
    All models are built with their base at y=0, centered on x/z, sized to the
@@ -80,11 +114,14 @@ export default function FurnitureModel({ f, pal }: { f: Fixture; pal: StylePalet
 
   switch (f.category) {
     case "table": {
-      const topT = 0.05;
+      // Café bistro table: marble top on a black metal pedestal (matches the reference renders).
+      const topT = 0.04;
+      const r = Math.min(w, d) / 2;
       return (
         <group>
-          {legs(w, d, h - topT, pal.metal)}
-          <Box p={[0, h - topT / 2, 0]} s={[w, topT, d]} c={pal.wood} r={0.5} tex={woodTexture(pal.wood)} />
+          <Cyl p={[0, 0.02, 0]} rt={r * 0.6} rb={r * 0.7} h={0.04} c="#17191b" r={0.4} m={0.7} seg={24} />
+          <Cyl p={[0, (h - topT) / 2, 0]} rt={0.035} rb={0.045} h={h - topT} c="#17191b" r={0.4} m={0.8} seg={16} />
+          <PbrBox p={[0, h - topT / 2, 0]} s={[w, topT, d]} mat="marble" tiles={0.9} roughness={0.3} />
         </group>
       );
     }
@@ -109,11 +146,14 @@ export default function FurnitureModel({ f, pal }: { f: Fixture; pal: StylePalet
     }
     case "counter":
     case "cashier": {
+      // Terrazzo-clad counter body with a marble top + Coffee Berry branding on the room-facing panel.
       const topT = 0.05;
+      const logoW = Math.max(0.6, Math.min(w * 0.35, 1.3));
       return (
         <group>
-          <Box p={[0, (h - topT) / 2, 0]} s={[w - 0.04, h - topT, d - 0.04]} c={pal.wood} r={0.6} tex={woodTexture(pal.wood)} />
-          <Box p={[0, h - topT / 2, 0]} s={[w, topT, d]} c={pal.counterTop} r={0.4} m={0.1} />
+          <PbrBox p={[0, (h - topT) / 2, 0]} s={[w - 0.04, h - topT, d - 0.04]} mat="terrazzo" tiles={0.5} roughness={0.5} />
+          <PbrBox p={[0, h - topT / 2, 0]} s={[w, topT, d]} mat="marble" tiles={0.7} roughness={0.3} />
+          <LogoPlane p={[0, (h - topT) * 0.5, -(d / 2) - 0.012]} w={logoW} />
           {f.category === "cashier" && <Box p={[0, h + 0.12, 0]} s={[w * 0.5, 0.24, 0.03]} c="#20242a" r={0.3} e="#101418" ei={0.3} />}
         </group>
       );
@@ -192,8 +232,8 @@ export default function FurnitureModel({ f, pal }: { f: Fixture; pal: StylePalet
       const baseH = h * 0.5;
       return (
         <group>
-          <Box p={[0, baseH / 2, 0]} s={[w, baseH, d]} c={pal.woodDark} r={0.6} />
-          <Box p={[0, baseH + 0.02, 0]} s={[w, 0.04, d]} c={pal.counterTop} r={0.4} />
+          <PbrBox p={[0, baseH / 2, 0]} s={[w, baseH, d]} mat="terrazzo" tiles={0.5} roughness={0.5} />
+          <PbrBox p={[0, baseH + 0.02, 0]} s={[w, 0.04, d]} mat="marble" tiles={0.7} roughness={0.3} />
           <Box p={[0, baseH + (h - baseH) / 2, 0]} s={[w * 0.98, h - baseH, d * 0.98]} c={pal.glass} r={0.1} m={0.1} transparent opacity={0.28} />
         </group>
       );
@@ -209,16 +249,15 @@ export default function FurnitureModel({ f, pal }: { f: Fixture; pal: StylePalet
     case "monitor":
     case "menu_board":
     case "signage": {
-      const dark = f.category === "monitor";
+      const dark = f.category !== "signage"; // menu boards & monitors are dark panels; signage is a light brand sign
+      const bw = Math.max(w, 0.1), bh = h, bd = Math.max(d, 0.04);
       return (
-        <Box
-          p={[0, h / 2, 0]}
-          s={[Math.max(w, 0.1), h, Math.max(d, 0.04)]}
-          c={dark ? "#15181b" : pal.woodDark}
-          r={0.4}
-          e={dark ? "#223042" : pal.accent}
-          ei={dark ? 0.35 : 0.12}
-        />
+        <group>
+          <Box p={[0, bh / 2, 0]} s={[bw, bh, bd]} c={dark ? "#15181b" : "#efe8db"} r={0.5} e={dark ? "#101418" : "#000000"} ei={dark ? 0.15 : 0} />
+          {f.category !== "monitor" && (
+            <LogoPlane p={[0, bh * 0.5, -(bd / 2) - 0.008]} w={Math.min(bw * 0.82, bh * 1.9)} ink={dark ? "#efe8db" : "#1a1614"} />
+          )}
+        </group>
       );
     }
     case "sofa":
@@ -262,12 +301,31 @@ export default function FurnitureModel({ f, pal }: { f: Fixture; pal: StylePalet
       );
     }
     case "umbrella": {
+      const R = Math.min(Math.max(w, d) * 0.5, 1.15); // cap so it doesn't dwarf the terrace
+      const coneH = 0.72; // proper pitch (not a flat disc)
+      const apexY = h;
+      const rimY = apexY - coneH / 2;
+      const valH = 0.17;
+      const SEG = 8; // octagonal market umbrella
       return (
         <group>
-          <Cyl p={[0, h * 0.5, 0]} rt={0.03} rb={0.03} h={h} c={pal.metal} seg={10} />
-          <mesh position={[0, h, 0]} castShadow>
-            <coneGeometry args={[Math.max(w, d) * 0.5, h * 0.25, 10]} />
-            <meshStandardMaterial color={pal.accent} roughness={0.8} />
+          <Cyl p={[0, h * 0.5, 0]} rt={0.026} rb={0.03} h={h} c="#2f3133" r={0.4} m={0.7} seg={12} />
+          {/* finial */}
+          <Cyl p={[0, apexY + coneH / 2 + 0.03, 0]} rt={0.02} rb={0.02} h={0.08} c="#2f3133" r={0.4} m={0.7} seg={8} />
+          {/* pitched canopy */}
+          <mesh position={[0, apexY, 0]} castShadow>
+            <coneGeometry args={[R, coneH, SEG]} />
+            <meshStandardMaterial color="#b9b3a6" roughness={0.9} side={THREE.DoubleSide} />
+          </mesh>
+          {/* cream valance band hanging from the rim */}
+          <mesh position={[0, rimY - valH / 2, 0]}>
+            <cylinderGeometry args={[R * 0.9, R * 0.9, valH, SEG, 1, true]} />
+            <meshStandardMaterial color="#efe8db" roughness={0.9} side={THREE.DoubleSide} />
+          </mesh>
+          {/* Coffee Berry wordmark repeated around the valance */}
+          <mesh position={[0, rimY - valH * 0.52, 0]}>
+            <cylinderGeometry args={[R * 0.905, R * 0.905, valH * 0.72, SEG, 1, true]} />
+            <meshStandardMaterial map={brandLogo(8)} transparent alphaTest={0.3} color="#1a1614" roughness={0.7} side={THREE.DoubleSide} />
           </mesh>
         </group>
       );

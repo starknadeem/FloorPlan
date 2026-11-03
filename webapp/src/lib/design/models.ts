@@ -67,6 +67,25 @@ export const MODEL_CATALOG: Record<string, ModelDef> = {
   // washroom
   toilet: { url: `${M}/toilet.glb`, baseRotationDeg: F, fit: "contain" },
   bathroom_sink: { url: `${M}/bathroomSink.glb`, baseRotationDeg: F, fit: "contain" },
+  mirror: { url: `${M}/bathroomMirror.glb`, baseRotationDeg: F, fit: "contain" },
+
+  // extra props placed by the room-furnishing pass (referenced by modelKey)
+  hood: { url: `${M}/hoodModern.glb`, baseRotationDeg: F, fit: "contain" },
+  microwave: { url: `${M}/kitchenMicrowave.glb`, baseRotationDeg: F, fit: "contain" },
+  toaster: { url: `${M}/toaster.glb`, baseRotationDeg: F, fit: "contain" },
+  computer: { url: `${M}/computerScreen.glb`, baseRotationDeg: F, fit: "contain" },
+  laptop: { url: `${M}/laptop.glb`, baseRotationDeg: F, fit: "contain" },
+  crockery_cabinet: { url: `${M}/bookcaseClosedDoors.glb`, baseRotationDeg: F, fit: "contain" },
+  wall_cabinet: { url: `${M}/kitchenCabinetUpper.glb`, baseRotationDeg: F, fit: "contain" },
+  wall_cabinet_double: { url: `${M}/kitchenCabinetUpperDouble.glb`, baseRotationDeg: F, fit: "contain" },
+  coat_rack: { url: `${M}/coatRackStanding.glb`, baseRotationDeg: 0, fit: "contain" },
+  trashcan: { url: `${M}/trashcan.glb`, baseRotationDeg: 0, fit: "contain" },
+  wall_lamp: { url: `${M}/lampWall.glb`, baseRotationDeg: F, fit: "contain" },
+  box: { url: `${M}/cardboardBoxClosed.glb`, baseRotationDeg: 0, fit: "contain" },
+  books: { url: `${M}/books.glb`, baseRotationDeg: 0, fit: "contain" },
+  desk: { url: `${M}/desk.glb`, baseRotationDeg: F, fit: "contain" },
+  desk_chair: { url: `${M}/chairDesk.glb`, baseRotationDeg: F, fit: "contain" },
+  console: { url: `${M}/cabinetTelevision.glb`, baseRotationDeg: F, fit: "contain" },
 };
 
 /** Default model per category (first variant). Used when a fixture has no explicit modelKey. */
@@ -75,7 +94,7 @@ export const MODEL_REGISTRY: Partial<Record<FixtureCategory, ModelDef>> = {
   stool: MODEL_CATALOG.stool_bar,
   sofa: MODEL_CATALOG.sofa,
   banquette: MODEL_CATALOG.bench_cushion,
-  table: MODEL_CATALOG.table_round,
+  // table → parametric marble bistro table (FurnitureModels.tsx), matches the reference renders.
   fridge: MODEL_CATALOG.fridge,
   freezer: MODEL_CATALOG.fridge_large,
   ice_maker: MODEL_CATALOG.fridge_small,
@@ -100,7 +119,6 @@ export const VARIANTS_BY_CATEGORY: Partial<Record<FixtureCategory, string[]>> = 
   stool: ["stool_bar"],
   sofa: ["sofa", "sofa_long"],
   banquette: ["bench_cushion", "sofa_long"],
-  table: ["table_round", "table_rect"],
   fridge: ["fridge", "fridge_large", "fridge_small"],
   freezer: ["fridge_large", "fridge"],
   ice_maker: ["fridge_small"],

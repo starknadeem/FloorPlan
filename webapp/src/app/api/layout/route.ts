@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { CafeScene } from "@/types/cafescene";
 import { planLayout } from "@/lib/design/anthropic";
 import { applyLayout, buildLayoutContext, deterministicResult, type LayoutResult } from "@/lib/design/layout";
+import { furnishScene } from "@/lib/design/furnish";
 
 export const maxDuration = 120;
 
@@ -36,8 +37,11 @@ export async function POST(req: Request) {
       note = "No AI key — used geometry facing and placed WC fixtures.";
     }
 
-    const next = applyLayout(scene, result);
-    return NextResponse.json({ scene: next, usedAI, note, added: next.fixtures.length - scene.fixtures.length });
+    // Orient the parsed fixtures, then furnish each room with the equipment it's missing.
+    const oriented = applyLayout(scene, result);
+    const furnished = furnishScene(oriented);
+    const next = { ...oriented, fixtures: [...oriented.fixtures, ...furnished] };
+    return NextResponse.json({ scene: next, usedAI, note: `${note} Furnished rooms (+${furnished.length}).`, added: furnished.length });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

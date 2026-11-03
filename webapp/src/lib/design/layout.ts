@@ -141,55 +141,6 @@ export function suggestFacing(scene: CafeScene): Record<string, number> {
   return out;
 }
 
-const WC_CATS = new Set(["wc", "wc_disabled"]);
-
-/** Add a toilet (+ basin) to any WC room that doesn't already have one. */
-export function insertWcFixtures(scene: CafeScene): Fixture[] {
-  const added: Fixture[] = [];
-  for (const room of scene.rooms) {
-    if (!WC_CATS.has(room.category) || room.polygon.length < 3) continue;
-    const already = scene.fixtures.some(
-      (f) => f.category === "toilet" && (f.roomId === room.id || pointInPoly(room.polygon, f.position[0], f.position[1])),
-    );
-    if (already) continue;
-
-    const c = polyCentroid(room.polygon);
-    // edges, longest first
-    const edges = room.polygon.map((a, i) => {
-      const b = room.polygon[(i + 1) % room.polygon.length];
-      return { a, b, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] as Vec2, L: len(sub(b, a)) };
-    }).sort((x, y) => y.L - x.L);
-    if (!edges.length || edges[0].L < 0.9) continue;
-
-    const place = (edge: typeof edges[number], off: number): { pos: Vec2; rot: number } => {
-      const dir = norm(sub(edge.b, edge.a));
-      let n: Vec2 = [-dir[1], dir[0]];
-      if (dot(n, sub(c, edge.mid)) < 0) n = [-n[0], -n[1]];
-      return { pos: [edge.mid[0] + n[0] * off, edge.mid[1] + n[1] * off], rot: facingDeg(n) };
-    };
-
-    const t = place(edges[0], 0.45);
-    added.push(mkFixture(`fx_wc_toilet_${room.id}`, "WC toilet", "toilet", room.id, t.pos, t.rot, [0.6, 0.7], 0.7));
-    // basin on a different wall if the room has one long enough
-    const sinkEdge = edges.find((e) => e !== edges[0] && e.L >= 0.7) ?? null;
-    if (sinkEdge) {
-      const s = place(sinkEdge, 0.3);
-      added.push(mkFixture(`fx_wc_sink_${room.id}`, "WC basin", "sink", room.id, s.pos, s.rot, [0.5, 0.4], 0.85, "bathroom_sink"));
-    }
-  }
-  return added;
-}
-
-function mkFixture(
-  id: string, name: string, category: FixtureCategory, roomId: string,
-  position: Vec2, rotation: number, footprint: Vec2, height: number, modelKey?: string,
-): Fixture {
-  return {
-    id, name, category, roomId, position, rotation, footprint, height, modelKey,
-    placedBy: "design", confidence: 0.6, source: { system: 2, method: "design" },
-  };
-}
-
 // ---------- AI context + apply ----------
 export interface LayoutItemCtx {
   id: string;
@@ -227,7 +178,8 @@ export interface LayoutResult {
   models: Record<string, string>;
 }
 
-/** Apply a layout result + deterministic WC additions to produce a new scene. */
+/** Apply a layout result (facing + model overrides) to the existing fixtures. Furnishing new
+ *  props is a separate step (see furnish.ts), run after this. */
 export function applyLayout(scene: CafeScene, result: LayoutResult): CafeScene {
   const fixtures = scene.fixtures.map((f) => {
     const next = { ...f };
@@ -238,8 +190,7 @@ export function applyLayout(scene: CafeScene, result: LayoutResult): CafeScene {
     if (mk && (VARIANTS_BY_CATEGORY[f.category] ?? []).includes(mk)) next.modelKey = mk;
     return next;
   });
-  const added = insertWcFixtures(scene);
-  return { ...scene, fixtures: [...fixtures, ...added] };
+  return { ...scene, fixtures };
 }
 
 /** The deterministic-only result (used as a fallback when the AI call is unavailable). */

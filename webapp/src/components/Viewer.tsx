@@ -186,7 +186,16 @@ export default function Viewer() {
       const res = await fetch("/api/render", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ image, prompt: `photorealistic ${scene.design?.style ?? ""} coffee shop interior, architectural visualization` }),
+        body: JSON.stringify({
+          image,
+          prompt:
+            `Photorealistic architectural visualization of a modern Coffee Berry specialty coffee shop, ` +
+            `${scene.design?.style ?? "contemporary"} style. Terrazzo and grey stone counters, marble ` +
+            `table tops on black pedestals, warm wood veneer shelving, polished concrete floor, cream ` +
+            `walls, black 3-group espresso machine, glass pastry display cases, pendant lighting, potted ` +
+            `olive trees, branded umbrellas on the terrace. Soft daylight, clean interior-design render, ` +
+            `high detail, realistic materials and reflections. Keep the existing layout and camera.`,
+        }),
       });
       const d = await res.json();
       if (res.status === 501) {
