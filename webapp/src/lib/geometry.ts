@@ -176,6 +176,7 @@ export const DEFAULT_HEIGHTS: Record<FixtureCategory, number> = {
   pendant_light: 0.3,
   umbrella: 2.4,
   cashier: 1.1,
+  toilet: 0.75,
   generic: 0.8,
 };
 
@@ -208,11 +209,29 @@ export const CATEGORY_COLORS: Record<FixtureCategory, string> = {
   pendant_light: "#2d2f31",
   umbrella: "#7d7a72",
   cashier: "#8a6a44",
+  toilet: "#e8eaec",
   generic: "#999999",
 };
 
 export function fixtureHeight(f: Fixture): number {
-  return f.height ?? DEFAULT_HEIGHTS[f.category] ?? 0.8;
+  // treat 0 / missing / negative as "unspecified" and fall back to a category default
+  if (f.height && f.height > 0.01) return f.height;
+  return DEFAULT_HEIGHTS[f.category] ?? 0.8;
+}
+
+/** Ray-cast point-in-polygon test (plan space). */
+export function pointInPolygon(poly: Vec2[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0];
+    const yi = poly[i][1];
+    const xj = poly[j][0];
+    const yj = poly[j][1];
+    const denom = yj - yi || 1e-9;
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / denom + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
 }
 
 export interface SceneFraming {

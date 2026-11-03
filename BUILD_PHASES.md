@@ -133,7 +133,24 @@ concrete, stone) + HDRI environment, smarter furniture auto-layout (clearances/a
 - [x] Image-based lighting via drei `<Environment>` + `<Lightformer>` (offline, no network HDRI) for
       soft reflections; exposure bumped
 - [x] Build passes; verified in render (flagstone terrace, wood tables, nicer shading), 0 errors
-**Deferred:** real glTF hero assets, normal maps, true HDRI, auto-layout with clearances.
+**Deferred:** normal maps, true HDRI.
+
+## Phase 4.2 — Seating layout + data fixes + real glTF models  ✅ 🧪
+- [x] **Chair auto-layout** (`src/lib/design/palette.ts` → `generateSeating`): places chairs around every
+      table, inside the room, avoiding counters/walls; skips tables that already have chairs; idempotent
+      (`fxd_chair_*`). Verified: parsed demo 73 → 87 fixtures, tables now seated.
+- [x] **Data fixes:** `fixtureHeight` treats 0/missing height as "use category default" (fixes the
+      flat/invisible 0-height "Construction table" counter); `pointInPolygon` helper added.
+- [x] **Real glTF models** (drop-in): `src/lib/design/models.ts` registry + `ModelFixture.tsx` loader
+      (useGLTF → scale to footprint → sit on floor → base rotation), with a `<Suspense>` fallback to the
+      primitive while loading / when no model is registered. Bounding box cached per model.
+- [x] Downloaded CC-licensed samples to `webapp/public/models/`: `SheenChair.glb` (chair),
+      `GlamVelvetSofa.glb` (sofa). Registered: chair → SheenChair, sofa → GlamVelvetSofa.
+- [x] Verified: real chair models render around tables; build passes.
+**To add your own models:** drop a `.glb` in `webapp/public/models/` and add one line to the registry
+(`MODEL_REGISTRY[category] = { url, baseRotationDeg }`). **Note:** the free Khronos chair is high-poly;
+for many repeated items prefer **low-poly** models for best performance. Still needed: `table`,
+`outdoor_chair` models (you're providing these).
 
 ## Phase 5 — Generative render layer  ✅ 🧪 (what's possible without an image model)
 > Reality: Anthropic/Claude cannot generate images. Reference-A photorealism needs a separate

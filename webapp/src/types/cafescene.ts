@@ -66,6 +66,7 @@ export type FixtureCategory =
   | "pendant_light"
   | "umbrella"
   | "cashier"
+  | "toilet"
   | "generic";
 
 export type SurfaceRole =
@@ -168,6 +169,8 @@ export interface Fixture {
   height?: number;
   baseHeight?: number; // off floor, default 0
   assetId?: string;
+  /** Optional specific model variant key (see MODEL_CATALOG); overrides the per-category default. */
+  modelKey?: string;
   placedBy: "parse" | "design";
   confidence: number;
   source: Provenance;

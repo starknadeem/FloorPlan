@@ -41,6 +41,7 @@ export default function Viewer() {
   const [showIssues, setShowIssues] = useState(true);
   const [style, setStyle] = useState<string>(coffeeBerryScene.design?.style ?? "industrial-chic");
   const [styleBusy, setStyleBusy] = useState(false);
+  const [arrangeBusy, setArrangeBusy] = useState(false);
   const [designNote, setDesignNote] = useState<string | null>(null);
   const [renderMsg, setRenderMsg] = useState<string | null>(null);
   const [renderBusy, setRenderBusy] = useState(false);
@@ -89,6 +90,31 @@ export default function Viewer() {
       setError(e instanceof Error ? e.message : "Design failed");
     } finally {
       setStyleBusy(false);
+    }
+  }
+
+  async function aiArrange() {
+    setArrangeBusy(true);
+    setDesignNote(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/layout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scene }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error || "Arrange request failed");
+      // keep current style/materials applied, remount to reframe
+      setScene(applyStyle(d.scene as CafeScene, style));
+      setSelected(null);
+      setSceneKey((k) => k + 1);
+      const extra = d.added ? ` (+${d.added} WC fixtures)` : "";
+      setDesignNote(`${d.note ?? "Arranged."}${extra}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Arrange failed");
+    } finally {
+      setArrangeBusy(false);
     }
   }
 
@@ -291,6 +317,9 @@ export default function Viewer() {
           </select>
           <button style={styles.aiBtn} disabled={styleBusy} onClick={aiDesign}>
             {styleBusy ? "Designing…" : "✨ AI design"}
+          </button>
+          <button style={styles.aiBtn} disabled={arrangeBusy} onClick={aiArrange} title="AI picks each fixture's facing + model and places WC fixtures">
+            {arrangeBusy ? "Arranging…" : "🪑 AI arrange"}
           </button>
         </div>
         {designNote && <div style={styles.designNote}>{designNote}</div>}

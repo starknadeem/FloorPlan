@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import * as THREE from "three";
 import type { CafeScene, Fixture } from "@/types/cafescene";
 import { fixtureHeight } from "@/lib/geometry";
 import type { StylePalette } from "@/lib/design/palette";
+import { resolveModel } from "@/lib/design/models";
 import FurnitureModel from "./FurnitureModels";
+import ModelFixture from "./ModelFixture";
 
 function FixtureItem({
   f,
@@ -22,6 +24,7 @@ function FixtureItem({
   const h = fixtureHeight(f);
   const base = f.baseHeight ?? 0;
   const [w, d] = f.footprint;
+  const modelDef = resolveModel(f.category, f.modelKey);
 
   return (
     <group
@@ -41,7 +44,13 @@ function FixtureItem({
         document.body.style.cursor = "auto";
       }}
     >
-      <FurnitureModel f={f} pal={pal} />
+      {modelDef ? (
+        <Suspense fallback={<FurnitureModel f={f} pal={pal} />}>
+          <ModelFixture def={modelDef} footprint={f.footprint} />
+        </Suspense>
+      ) : (
+        <FurnitureModel f={f} pal={pal} />
+      )}
 
       {/* transparent hit box covering the whole footprint for easy selection */}
       <mesh position={[0, h / 2, 0]}>

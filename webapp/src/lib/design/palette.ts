@@ -2,8 +2,8 @@
 // Style presets (palette + materials + lighting mood) and the logic that writes a DesignSpec into
 // a CafeScene and lets the design step add pendant lighting over indoor rooms.
 
-import type { CafeScene, Fixture, LightSource, Provenance, Vec2 } from "@/types/cafescene";
-import { polygonCentroid } from "@/lib/geometry";
+import type { CafeScene, Fixture, LightSource, Provenance, Room, Vec2 } from "@/types/cafescene";
+import { polygonCentroid, pointInPolygon } from "@/lib/geometry";
 
 export interface StylePalette {
   key: string;
@@ -191,9 +191,12 @@ export function applyStyle(scene: CafeScene, key: string): CafeScene {
     }
   }
 
+  // design step also arranges chairs around tables
+  const chairs = generateSeating(scene.rooms, baseFixtures);
+
   return {
     ...scene,
-    fixtures: [...baseFixtures, ...added],
+    fixtures: [...baseFixtures, ...added, ...chairs],
     lights: [...baseLights, ...addedLights],
     design: {
       style: pal.key,
@@ -210,6 +213,76 @@ export function applyStyle(scene: CafeScene, key: string): CafeScene {
       source: DESIGN_SRC,
     },
   };
+}
+
+const dist2 = (a: Vec2, b: Vec2) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+
+// furniture a chair must not overlap
+const BLOCKER_CATS = new Set([
+  "counter", "banquette", "sofa", "cooling_case", "display_case", "fridge", "freezer",
+  "shelving", "sink", "oven", "dishwasher", "cashier", "ice_maker",
+]);
+
+/**
+ * Design-time seating: place chairs around each table (inside the room, avoiding counters/walls).
+ * Idempotent via the `fxd_` id prefix (stripped on re-apply). Skips tables that already have chairs.
+ */
+function generateSeating(rooms: Room[], fixtures: Fixture[]): Fixture[] {
+  const tables = fixtures.filter((f) => f.category === "table");
+  const existingChairs = fixtures.filter((f) => f.category === "chair" || f.category === "stool");
+  const blockers = fixtures.filter((f) => BLOCKER_CATS.has(f.category));
+  const out: Fixture[] = [];
+  const CW = 0.46;
+  const GAP = 0.3;
+  let n = 0;
+
+  for (const t of tables) {
+    const room =
+      rooms.find((r) => r.id === t.roomId) ??
+      rooms.find((r) => pointInPolygon(r.polygon, t.position[0], t.position[1]));
+
+    // already seated? (parsed chairs nearby)
+    const near = existingChairs.filter((c) => dist2(c.position, t.position) < 1.3 * 1.3).length;
+    if (near >= 2) continue;
+
+    const [w, d] = t.footprint;
+    const seats = Math.max(w, d) >= 1.1 ? 4 : 2;
+    const ox = w / 2 + GAP + CW / 2;
+    const oy = d / 2 + GAP + CW / 2;
+    const offsets: Vec2[] =
+      seats === 4
+        ? [[0, oy], [0, -oy], [-ox, 0], [ox, 0]]
+        : [[0, oy], [0, -oy]];
+
+    for (const off of offsets) {
+      const pos: Vec2 = [t.position[0] + off[0], t.position[1] + off[1]];
+      if (room && !pointInPolygon(room.polygon, pos[0], pos[1])) continue; // outside room / into wall
+      const blocked = blockers.some(
+        (b) =>
+          Math.abs(pos[0] - b.position[0]) < b.footprint[0] / 2 + CW / 2 &&
+          Math.abs(pos[1] - b.position[1]) < b.footprint[1] / 2 + CW / 2,
+      );
+      if (blocked) continue;
+      const dx = t.position[0] - pos[0];
+      const dy = t.position[1] - pos[1];
+      const rotation = (Math.atan2(-dx, dy) * 180) / Math.PI; // face the table
+      n++;
+      out.push({
+        id: `fxd_chair_${n}`,
+        name: "Chair",
+        category: "chair",
+        roomId: room?.id,
+        position: pos,
+        rotation,
+        footprint: [CW, CW],
+        height: 0.9,
+        placedBy: "design",
+        confidence: 1,
+        source: DESIGN_SRC,
+      });
+    }
+  }
+  return out;
 }
 
 /** 1–4 evenly spread ceiling-light spots for a room polygon, based on its area/extent. */
