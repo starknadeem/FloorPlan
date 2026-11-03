@@ -16,6 +16,8 @@ export interface CaptureApi {
   capture: () => string | null;
   isometric: () => void;
   reset: () => void;
+  /** Current camera pose in three.js WORLD coords, for the Blender render route. */
+  cameraPose: () => { position: [number, number, number]; target: [number, number, number] };
 }
 
 function Ground({ center, color }: { center: [number, number, number]; color: string }) {
@@ -69,6 +71,13 @@ function CaptureController({
         } else {
           camera.lookAt(...defaultTarget);
         }
+      },
+      cameraPose: () => {
+        const t = controls?.target ?? new THREE.Vector3(...defaultTarget);
+        return {
+          position: [camera.position.x, camera.position.y, camera.position.z],
+          target: [t.x, t.y, t.z],
+        };
       },
     };
   }, [gl, scene, camera, controls, center, span, defaultCam, defaultTarget, apiRef]);

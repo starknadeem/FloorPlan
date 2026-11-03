@@ -10,6 +10,7 @@ import type { ViewMode } from "@/components/scene/Controls";
 import type { CaptureApi } from "@/components/scene/CafeCanvas";
 import PlanEditor from "@/components/PlanEditor";
 import { applyStyle, STYLE_PRESETS } from "@/lib/design/palette";
+import type { TourStop } from "@/components/tour/TourViewer";
 
 const CafeCanvas = dynamic(() => import("@/components/scene/CafeCanvas"), {
   ssr: false,
@@ -19,6 +20,8 @@ const CafeCanvas = dynamic(() => import("@/components/scene/CafeCanvas"), {
     </div>
   ),
 });
+
+const TourViewer = dynamic(() => import("@/components/tour/TourViewer"), { ssr: false });
 
 interface ParseMeta {
   model: string;
@@ -45,6 +48,11 @@ export default function Viewer() {
   const [designNote, setDesignNote] = useState<string | null>(null);
   const [renderMsg, setRenderMsg] = useState<string | null>(null);
   const [renderBusy, setRenderBusy] = useState(false);
+  const [renderImg, setRenderImg] = useState<string | null>(null);
+  const [tour, setTour] = useState<{ baseUrl: string; stops: TourStop[] } | null>(null);
+  const [tourBusy, setTourBusy] = useState(false);
+  const [tourProgress, setTourProgress] = useState<{ percent: number; label: string } | null>(null);
+  const tourAbort = useRef<AbortController | null>(null);
   const [started, setStarted] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -150,9 +158,13 @@ export default function Viewer() {
         );
         return;
       }
+      const styled = applyStyle(parsed, style);
       loadScene(parsed, "parsed");
       setMeta(data.meta as ParseMeta);
       setShowIssues(true);
+      // Auto-build the photoreal Blender tour from the uploaded plan (the primary result).
+      // Fire-and-forget: the viewer stays usable; the tour opens when its render finishes.
+      void generateTour(styled);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Parsing failed. Please try again.");
     } finally {
@@ -210,6 +222,120 @@ export default function Viewer() {
     } finally {
       setRenderBusy(false);
     }
+  }
+
+  async function blenderRender() {
+    const pose = captureApi.current?.cameraPose();
+    setRenderBusy(true);
+    setRenderMsg("Rendering in Blender (Cycles)… this can take 10–60s.");
+    try {
+      const res = await fetch("/api/render/blender", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scene,
+          cam: pose ? [...pose.position, ...pose.target] : undefined,
+          samples: 96,
+          res: [1600, 900],
+          ceiling: false, // dollhouse: open roof so the furnished interior is visible
+        }),
+      });
+      const d = await res.json();
+      if (res.status === 501) {
+        setRenderMsg(d.error);
+      } else if (!res.ok) {
+        setRenderMsg(d?.detail ? `${d.error}\n${d.detail}` : d?.error || "Blender render failed.");
+      } else if (d.imageUrl) {
+        setRenderImg(d.imageUrl);
+        setRenderMsg(null);
+      }
+    } catch (e) {
+      setRenderMsg(e instanceof Error ? e.message : "Blender render failed");
+    } finally {
+      setRenderBusy(false);
+    }
+  }
+
+  function cancelTour() {
+    tourAbort.current?.abort();
+  }
+
+  async function generateTour(sceneArg?: CafeScene) {
+    const useScene = sceneArg ?? scene;
+    const ac = new AbortController();
+    tourAbort.current = ac;
+    setTourBusy(true);
+    setTourProgress({ percent: 0, label: "Starting Blender…" });
+    setRenderMsg(null);
+    try {
+      const res = await fetch("/api/tour", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scene: useScene }),
+        signal: ac.signal,
+      });
+      if (!res.ok || !res.body) {
+        const d = await res.json().catch(() => ({}));
+        setRenderMsg(d?.error || `Tour request failed (${res.status}).`);
+        return;
+      }
+      // read the NDJSON progress stream
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let opened = false;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line) as {
+            type: string;
+            percent?: number;
+            label?: string;
+            error?: string;
+            detail?: string;
+            baseUrl?: string;
+            stops?: TourStop[];
+          };
+          if (ev.type === "progress") {
+            setTourProgress({ percent: ev.percent ?? 0, label: ev.label ?? "Rendering…" });
+          } else if (ev.type === "done" && ev.stops?.length) {
+            setTourProgress({ percent: 100, label: "Opening tour…" });
+            setTour({ baseUrl: ev.baseUrl!, stops: ev.stops });
+            opened = true;
+          } else if (ev.type === "error") {
+            setRenderMsg(ev.detail ? `${ev.error}\n${ev.detail}` : ev.error || "Tour render failed.");
+          }
+        }
+      }
+      if (!opened && !tour) setRenderMsg((m) => m ?? "Tour render produced no panoramas.");
+    } catch (e) {
+      if ((e as Error)?.name === "AbortError") {
+        setRenderMsg("Tour cancelled. (Blender may keep rendering in the background.)");
+      } else {
+        setRenderMsg(e instanceof Error ? e.message : "Tour render failed");
+      }
+    } finally {
+      setTourBusy(false);
+      setTourProgress(null);
+      tourAbort.current = null;
+    }
+  }
+
+  if (tour) {
+    return (
+      <TourViewer
+        stops={tour.stops}
+        baseUrl={tour.baseUrl}
+        projectName={scene.project.name}
+        onExit={() => setTour(null)}
+      />
+    );
   }
 
   const issues = scene.issues ?? [];
@@ -370,11 +496,51 @@ export default function Viewer() {
       <div style={styles.renderPanel}>
         <button style={styles.rbtn} onClick={dollhouse} title="Isometric dollhouse view (Reference B)">🏠 Dollhouse</button>
         <button style={styles.rbtn} onClick={downloadPng} title="Export the current view as a PNG">📸 Download PNG</button>
-        <button style={styles.rbtnAccent} disabled={renderBusy} onClick={aiPhotoreal} title="AI photoreal render (needs an image-model key)">
-          {renderBusy ? "Rendering…" : "✨ AI Photoreal"}
+        <button style={styles.rbtnAccent} disabled={tourBusy || renderBusy} onClick={() => generateTour()} title="Build a walkable photoreal 360° tour in Blender">
+          {tourBusy ? "Building tour…" : "🎬 Photoreal Tour"}
+        </button>
+        <button style={styles.rbtn} disabled={tourBusy || renderBusy} onClick={blenderRender} title="Single photoreal Blender Cycles render of the current view">
+          {renderBusy ? "Rendering…" : "📷 Blender Still"}
+        </button>
+        <button style={styles.rbtn} disabled={tourBusy || renderBusy} onClick={aiPhotoreal} title="AI photoreal render (needs an image-model key)">
+          ✨ AI Photoreal
         </button>
         {renderMsg && <div style={styles.renderMsg}>{renderMsg}</div>}
       </div>
+
+      {/* Building-tour overlay with live progress */}
+      {tourBusy && (
+        <div style={styles.tourBusy}>
+          <div style={styles.tourBusyCard}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>Building your photoreal 360° tour…</div>
+            <div style={styles.progCount}>{Math.round(tourProgress?.percent ?? 0)}%</div>
+            <div style={styles.progTrack}>
+              <div style={{ ...styles.progFill, width: `${Math.max(3, tourProgress?.percent ?? 0)}%` }} />
+            </div>
+            <div style={{ fontSize: 12.5, color: "#c7bdac", marginTop: 10, minHeight: 16 }}>
+              {tourProgress?.label ?? "Starting…"}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#8f857a", marginTop: 6 }}>
+              Rendering each room of {scene.project.name} in Blender.
+            </div>
+            <button style={styles.tourCancel} onClick={cancelTour}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Blender render result overlay */}
+      {renderImg && (
+        <div style={styles.renderOverlay} onClick={() => setRenderImg(null)}>
+          <div style={styles.renderModal} onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={renderImg} alt="Blender Cycles render" style={styles.renderImage} />
+            <div style={styles.renderModalBar}>
+              <button style={styles.rbtn} onClick={() => downloadDataUrl(renderImg, `${scene.project.name.replace(/\W+/g, "_")}_blender.png`)}>📥 Download</button>
+              <button style={styles.rbtn} onClick={() => setRenderImg(null)}>✕ Close</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Issues panel */}
       {issues.length > 0 && (
@@ -475,7 +641,17 @@ const styles: Record<string, CSSProperties> = {
   renderPanel: { position: "absolute", bottom: 18, left: "50%", transform: "translateX(-50%)", display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, maxWidth: 440, background: "rgba(255,255,255,0.9)", backdropFilter: "blur(8px)", borderRadius: 12, padding: 10, boxShadow: "0 4px 20px rgba(0,0,0,0.14)" },
   rbtn: { border: "1px solid #d6cfbf", background: "#faf8f3", padding: "8px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", color: "#3a352e", fontWeight: 600 },
   rbtnAccent: { border: "1px solid #9a6b2f", background: "#fff6ea", color: "#9a6b2f", padding: "8px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 600 },
-  renderMsg: { flexBasis: "100%", fontSize: 11.5, color: "#5b5349", lineHeight: 1.4, textAlign: "center", marginTop: 2 },
+  renderMsg: { flexBasis: "100%", fontSize: 11.5, color: "#5b5349", lineHeight: 1.4, textAlign: "center", marginTop: 2, whiteSpace: "pre-wrap" },
+  renderOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 },
+  renderModal: { background: "#1a1713", borderRadius: 12, overflow: "hidden", maxWidth: "92vw", maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 48px rgba(0,0,0,0.5)" },
+  renderImage: { maxWidth: "92vw", maxHeight: "80vh", display: "block", objectFit: "contain" },
+  renderModalBar: { display: "flex", gap: 8, justifyContent: "flex-end", padding: 10, background: "#211d18" },
+  tourBusy: { position: "fixed", inset: 0, background: "rgba(13,11,9,0.82)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100, backdropFilter: "blur(3px)" },
+  tourBusyCard: { textAlign: "center", color: "#f3ece0", padding: "26px 30px", background: "#1b1713", borderRadius: 16, border: "1px solid rgba(255,210,150,0.2)", boxShadow: "0 12px 48px rgba(0,0,0,0.5)", width: 340, maxWidth: "90vw" },
+  progCount: { fontSize: 34, fontWeight: 800, color: "#ffce8f", margin: "10px 0 8px", fontVariantNumeric: "tabular-nums" },
+  progTrack: { width: "100%", height: 8, borderRadius: 999, background: "rgba(255,255,255,0.1)", overflow: "hidden" },
+  progFill: { height: "100%", borderRadius: 999, background: "linear-gradient(90deg,#ffb347,#ffce8f)", transition: "width 0.4s ease" },
+  tourCancel: { marginTop: 18, background: "rgba(255,255,255,0.08)", color: "#e8e0d2", border: "1px solid rgba(255,255,255,0.18)", padding: "7px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 600 },
   dnd: { position: "absolute", inset: 0, zIndex: 40, display: "grid", placeItems: "center", background: "rgba(154,107,47,0.14)", border: "3px dashed #9a6b2f", pointerEvents: "none" },
   dndCard: { background: "#fff", padding: "16px 24px", borderRadius: 12, fontWeight: 700, color: "#23201b", boxShadow: "0 8px 30px rgba(0,0,0,0.2)" },
   issues: { position: "absolute", bottom: 18, right: 18, width: 320, maxHeight: "45vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "rgba(255,255,255,0.92)", backdropFilter: "blur(8px)", borderRadius: 12, boxShadow: "0 6px 26px rgba(0,0,0,0.16)" },
