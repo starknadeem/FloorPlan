@@ -158,12 +158,29 @@ export default function Viewer() {
         );
         return;
       }
-      const styled = applyStyle(parsed, style);
-      loadScene(parsed, "parsed");
       setMeta(data.meta as ParseMeta);
       setShowIssues(true);
-      // Auto-build the photoreal Blender tour from the uploaded plan (the primary result).
-      // Fire-and-forget: the viewer stays usable; the tour opens when its render finishes.
+      // Auto-furnish: fill every room with the equipment it's missing (WC → toilet/basin/mirror,
+      // kitchen → stove/hood/fridge, counter → espresso/grinder/POS, seating → chairs, …) using
+      // the same engine as the "AI arrange" button. A parsed plan rarely draws every appliance,
+      // so without this the rooms render half-empty. Falls back to the raw parse if it fails.
+      let furnished = parsed;
+      try {
+        const lres = await fetch("/api/layout", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ scene: parsed }),
+        });
+        if (lres.ok) {
+          const ld = await lres.json();
+          if (ld?.scene?.fixtures) furnished = ld.scene as CafeScene;
+        }
+      } catch {
+        /* keep the un-furnished parse */
+      }
+      const styled = applyStyle(furnished, style);
+      loadScene(furnished, "parsed");
+      // Build the photoreal Blender tour from the fully-furnished scene (the primary result).
       void generateTour(styled);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Parsing failed. Please try again.");

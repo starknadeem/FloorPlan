@@ -641,6 +641,7 @@ def build_lights(scene, style, coll):
 
     # pendant / point lights from scene.lights
     tint = kelvin_to_rgb(style.get("colorTempK", 3000))
+    lit_points = []
     for l in scene.get("lights", []):
         if l.get("type") not in ("pendant", "point", "spot"):
             continue
@@ -652,6 +653,31 @@ def build_lights(scene, style, coll):
         data.shadow_soft_size = 0.12
         o = bpy.data.objects.new(f"pt_{l['id']}", data)
         o.location = (p[0], p[1], mh)
+        coll.objects.link(o)
+        lit_points.append(p)
+
+    # Guarantee every enclosed room has light. Cycles is physical: a windowless WC or back room
+    # with no lamp renders pitch black (the furniture is there but invisible). Add a soft ceiling
+    # fill to any ceilinged room that has no pendant/point light inside it.
+    for room in scene.get("rooms", []):
+        ch = room.get("ceilingHeight", 0) or 0
+        if ch <= 0:
+            continue  # outdoor / open to sky
+        poly = room["polygon"]
+        if any(_point_in_poly(poly, p[0], p[1]) for p in lit_points):
+            continue  # already has a lamp
+        cx, cy = _centroid(poly)
+        xs = [p[0] for p in poly]; ys = [p[1] for p in poly]
+        w = max(xs) - min(xs); d = max(ys) - min(ys)
+        area = max(w * d, 1.0)
+        data = bpy.data.lights.new(f"fill_{room['id']}", "AREA")
+        data.shape = "RECTANGLE"
+        data.size = min(max(w * 0.5, 0.4), 2.2)
+        data.size_y = min(max(d * 0.5, 0.4), 2.2)
+        data.energy = min(max(area * 18.0, 45.0), 280.0)
+        data.color = tint
+        o = bpy.data.objects.new(f"fill_{room['id']}", data)
+        o.location = (cx, cy, ch - 0.08)  # just under the ceiling, facing down (area light -Z)
         coll.objects.link(o)
 
 
