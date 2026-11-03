@@ -1,0 +1,24 @@
+# Dependencies / build artifacts
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Secrets — never commit
+.env
+.env.*
+*.local
+
+# Client-confidential / large assets (kept out of the repo)
+clientsDocs/
+FloorPlans/
+image.jpeg
+image2.jpeg
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
