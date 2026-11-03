@@ -646,7 +646,7 @@ const styles: Record<string, CSSProperties> = {
   primaryBtn: { border: "none", background: "#23201b", color: "#fff", padding: "8px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" },
   ghostBtn: { border: "1px solid #cfc8bc", background: "transparent", color: "#4a453d", padding: "8px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer" },
   styleRow: { display: "flex", alignItems: "center", gap: 8, marginTop: 10 },
-  select: { border: "1px solid #d6cfbf", borderRadius: 7, padding: "6px 8px", fontSize: 13, background: "#fff", cursor: "pointer" },
+  select: { border: "1px solid #d6cfbf", borderRadius: 7, padding: "6px 8px", fontSize: 13, background: "#fff", color: "#2b2620", cursor: "pointer" },
   aiBtn: { border: "1px solid #9a6b2f", background: "#fff6ea", color: "#9a6b2f", padding: "6px 12px", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" },
   designNote: { marginTop: 8, fontSize: 11.5, color: "#5b5349", background: "#f5efe3", padding: "7px 10px", borderRadius: 7, lineHeight: 1.4 },
   error: { marginTop: 10, fontSize: 12, color: "#c0392b", background: "#fbeceb", padding: "7px 10px", borderRadius: 7 },

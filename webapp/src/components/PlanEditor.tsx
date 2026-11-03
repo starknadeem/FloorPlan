@@ -347,6 +347,6 @@ const S: Record<string, CSSProperties> = {
   h3: { fontSize: 13, letterSpacing: 1, textTransform: "uppercase", color: "#9a6b2f", margin: "4px 0 12px" },
   field: { display: "flex", flexDirection: "column", gap: 3, marginBottom: 10 },
   flabel: { fontSize: 11, color: "#8a847a" },
-  in: { border: "1px solid #d6cfbf", borderRadius: 6, padding: "6px 8px", fontSize: 13, width: "100%", boxSizing: "border-box" },
+  in: { border: "1px solid #d6cfbf", borderRadius: 6, padding: "6px 8px", fontSize: 13, width: "100%", boxSizing: "border-box", color: "#2b2620", background: "#fff" },
   scaleBox: { marginTop: 10, padding: 10, background: "#faf7f0", borderRadius: 8, border: "1px solid #ece4d4" },
 };

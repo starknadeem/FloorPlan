@@ -3,6 +3,10 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* The whole UI is a light theme (white/cream panels). Pin the color-scheme to light so the OS
+     dark mode can't invert native controls (dropdown popups, inputs, scrollbars) into unreadable
+     light-on-light text. */
+  color-scheme: light;
 }
 
 @theme inline {
@@ -12,11 +16,21 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* NOTE: no dark-mode override — the app is light-themed, and flipping --foreground to a light
+   colour made every element that relies on inherited text colour (the style dropdown, its
+   options, the plan-editor inputs) invisible on their white backgrounds. */
+
+/* Native form controls: always dark text on white so they stay readable in any OS theme. */
+select,
+input,
+textarea,
+option {
+  color: #2b2620;
+  background-color: #ffffff;
+}
+option {
+  color: #2b2620;
+  background-color: #ffffff;
 }
 
 html,
