@@ -9,6 +9,8 @@ import Building from "./Building";
 import Fixtures from "./Fixtures";
 import Lights from "./Lights";
 import Controls, { type ViewMode } from "./Controls";
+import WalkController from "@/components/tour/WalkController";
+import type { TourStore } from "@/lib/tour/store";
 import { frameScene } from "@/lib/geometry";
 import { resolvePalette } from "@/lib/design/palette";
 
@@ -91,12 +93,17 @@ export default function CafeCanvas({
   selectedId,
   onSelect,
   captureApi,
+  tour,
+  evening = false,
 }: {
   scene: CafeScene;
   mode: ViewMode;
   selectedId: string | null;
   onSelect: (f: Fixture | null) => void;
   captureApi?: RefObject<CaptureApi | null>;
+  /** Walk-mode state; required when mode === "walk". */
+  tour?: TourStore | null;
+  evening?: boolean;
 }) {
   const { target, camera, center, span } = frameScene({ walls: scene.walls, rooms: scene.rooms });
   const pal = resolvePalette(scene);
@@ -118,7 +125,7 @@ export default function CafeCanvas({
       }}
     >
       <Suspense fallback={null}>
-        <Lights scene={scene} pal={pal} />
+        <Lights scene={scene} pal={pal} evening={evening} />
         <Environment resolution={128}>
           <Lightformer form="rect" intensity={1.6} position={[0, 8, 0]} scale={[14, 14, 1]} rotation={[-Math.PI / 2, 0, 0]} color={pal.light.hemiSky} />
           <Lightformer form="rect" intensity={0.9} position={[8, 3, 6]} scale={[8, 8, 1]} color="#ffffff" />
@@ -128,7 +135,7 @@ export default function CafeCanvas({
         <Building scene={scene} pal={pal} />
         <Fixtures scene={scene} pal={pal} selectedId={selectedId} onSelect={onSelect} />
       </Suspense>
-      <Controls mode={mode} target={target} />
+      {mode === "walk" && tour ? <WalkController store={tour} /> : <Controls target={target} />}
       {captureApi && (
         <CaptureController apiRef={captureApi} center={center} span={span} defaultCam={camera} defaultTarget={target} />
       )}

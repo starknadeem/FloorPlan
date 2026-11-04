@@ -135,7 +135,7 @@ function RoomSurfaces({ room, pal }: { room: Room; pal: StylePalette }) {
 
   return (
     <group>
-      <mesh geometry={geom} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]} receiveShadow>
+      <mesh geometry={geom} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]} receiveShadow userData={{ floor: true }}>
         <meshStandardMaterial
           map={floor.map}
           normalMap={floor.normalMap}

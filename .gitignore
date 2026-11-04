@@ -22,3 +22,6 @@ Thumbs.db
 *.log
 .vscode/
 .idea/
+
+# AI-generated design tours (large, regenerable)
+/public/designs/

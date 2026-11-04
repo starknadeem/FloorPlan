@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import type { CafeScene, Fixture } from "@/types/cafescene";
 import { coffeeBerryScene } from "@/data/coffeeBerry";
 import { sampleParsedScene } from "@/data/sampleParsed";
@@ -11,6 +11,9 @@ import type { CaptureApi } from "@/components/scene/CafeCanvas";
 import PlanEditor from "@/components/PlanEditor";
 import { applyStyle, STYLE_PRESETS } from "@/lib/design/palette";
 import type { TourStop } from "@/components/tour/TourViewer";
+import { buildTourModel } from "@/lib/tour/model";
+import DesignTourPanel, { fileToImageIn, type BlenderResult, type ImageIn } from "@/components/DesignTourPanel";
+import { TourStore } from "@/lib/tour/store";
 
 const CafeCanvas = dynamic(() => import("@/components/scene/CafeCanvas"), {
   ssr: false,
@@ -22,6 +25,10 @@ const CafeCanvas = dynamic(() => import("@/components/scene/CafeCanvas"), {
 });
 
 const TourViewer = dynamic(() => import("@/components/tour/TourViewer"), { ssr: false });
+const WalkOverlay = dynamic(() => import("@/components/tour/WalkOverlay"), { ssr: false });
+const BlenderWalkViewer = dynamic(() => import("@/components/tour/BlenderWalkViewer"), { ssr: false });
+
+const noSubscribe = () => () => {};
 
 interface ParseMeta {
   model: string;
@@ -54,9 +61,22 @@ export default function Viewer() {
   const [tourProgress, setTourProgress] = useState<{ percent: number; label: string } | null>(null);
   const tourAbort = useRef<AbortController | null>(null);
   const [started, setStarted] = useState(false);
+  // AI design tour (the claude.ai flow): plan image(s) kept from the upload, panel + result viewer.
+  const [planImages, setPlanImages] = useState<ImageIn[]>([]);
+  const [designPanel, setDesignPanel] = useState(false);
+  const [designUrl, setDesignUrl] = useState<string | null>(null);
+  const [blenderResult, setBlenderResult] = useState<BlenderResult | null>(null);
+  const [blenderWalk, setBlenderWalk] = useState<{ glbUrl: string; sceneUrl: string } | null>(null);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const captureApi = useRef<CaptureApi | null>(null);
+
+  // Walk mode: collision + stops + narration derived from the current scene (cheap, rebuilt on change).
+  const walkStore = useMemo(() => (mode === "walk" ? new TourStore(buildTourModel(scene)) : null), [mode, scene]);
+  useEffect(() => () => walkStore?.dispose(), [walkStore]);
+  useSyncExternalStore(walkStore ? walkStore.subscribe : noSubscribe, () => walkStore?.version ?? 0, () => 0);
+  const evening = walkStore?.evening ?? false;
 
   const stats = {
     rooms: scene.rooms.length,
@@ -146,6 +166,8 @@ export default function Viewer() {
 
     setBusy(true);
     try {
+      const planImg = await fileToImageIn(file);
+      setPlanImages(planImg ? [planImg] : []);
       const fd = new FormData();
       fd.append("file", file);
       const res = await fetch("/api/parse", { method: "POST", body: fd });
@@ -178,10 +200,9 @@ export default function Viewer() {
       } catch {
         /* keep the un-furnished parse */
       }
-      const styled = applyStyle(furnished, style);
       loadScene(furnished, "parsed");
-      // Build the photoreal Blender tour from the fully-furnished scene (the primary result).
-      void generateTour(styled);
+      // Next step of the flow: references + brief → Claude designs the café and writes the 3D tour.
+      setDesignPanel(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Parsing failed. Please try again.");
     } finally {
@@ -355,6 +376,84 @@ export default function Viewer() {
     );
   }
 
+  if (blenderWalk) {
+    return (
+      <div style={styles.root}>
+        <BlenderWalkViewer glbUrl={blenderWalk.glbUrl} sceneUrl={blenderWalk.sceneUrl} projectName={scene.project.name} onExit={() => setBlenderWalk(null)} />
+      </div>
+    );
+  }
+
+  if (blenderResult) {
+    const r = blenderResult;
+    return (
+      <div style={{ ...styles.root, background: "#141110", overflowY: "auto" }}>
+        <div style={styles.designBar}>
+          <span style={styles.designBadge}>🏗️ AI design in Blender · {scene.project.name}</span>
+          {r.glbUrl && r.sceneUrl && (
+            <button style={{ ...styles.designLink, background: "#9a6a3a", border: "1px solid transparent", fontWeight: 700 }} onClick={() => setBlenderWalk({ glbUrl: r.glbUrl!, sceneUrl: r.sceneUrl! })}>🚶 Walk it on the web</button>
+          )}
+          {r.tour && r.tour.stops.length > 0 && (
+            <button style={styles.designLink} onClick={() => setTour({ baseUrl: r.tour!.baseUrl, stops: r.tour!.stops as TourStop[] })}>🎬 Walk the 360° tour</button>
+          )}
+          <a style={styles.designLink} href={r.designUrl} download>Download design.py</a>
+          <button style={styles.designLink} onClick={() => { setBlenderResult(null); setDesignPanel(true); }}>New design</button>
+          <button style={styles.designExit} onClick={() => setBlenderResult(null)}>✕ Exit</button>
+        </div>
+        <div style={styles.gallery}>
+          {r.live && (
+            <div style={styles.galleryNote}>Built in your open Blender. Output: <code>{r.live}</code></div>
+          )}
+          {r.stills.map((s) => (
+            <figure key={s.url} style={styles.galleryItem} onClick={() => setLightbox(s.url)}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={s.url} alt={s.label} style={styles.galleryImg} />
+              <figcaption style={styles.galleryCap}>{s.label}</figcaption>
+            </figure>
+          ))}
+          {!r.stills.length && !r.live && (
+            <div style={styles.galleryNote}>{r.glbUrl ? "The café was built in Blender and exported as a 3D model. Use “Walk it on the web” above, or re-run with photoreal stills." : "No renders in this result."}</div>
+          )}
+        </div>
+        {lightbox && (
+          <div style={styles.renderOverlay} onClick={() => setLightbox(null)}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={lightbox} alt="render" style={styles.renderImage} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (designUrl) {
+    return (
+      <div style={styles.root}>
+        <iframe src={designUrl} title="AI design tour" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, background: "#1c1511" }} allow="fullscreen" />
+        <div style={styles.designBar}>
+          <span style={styles.designBadge}>🎨 AI design tour · {scene.project.name}</span>
+          <a style={styles.designLink} href={designUrl} target="_blank" rel="noreferrer">Open in new tab</a>
+          <a style={styles.designLink} href={designUrl} download={`${scene.project.name.replace(/\W+/g, "_")}_tour.html`}>Download HTML</a>
+          <button style={styles.designLink} onClick={() => { setDesignUrl(null); setDesignPanel(true); }}>New design</button>
+          <button style={styles.designExit} onClick={() => setDesignUrl(null)}>✕ Exit</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "walk" && walkStore) {
+    return (
+      <div style={styles.root}>
+        <CafeCanvas key={sceneKey} scene={scene} mode="walk" selectedId={null} onSelect={() => {}} tour={walkStore} evening={evening} />
+        <WalkOverlay
+          store={walkStore}
+          projectName={scene.project.name}
+          subtitle={`${stats.rooms} rooms · ${stats.fixtures} fixtures · walkable model`}
+          onExit={() => setMode("orbit")}
+        />
+      </div>
+    );
+  }
+
   const issues = scene.issues ?? [];
   const errCount = issues.filter((i) => i.severity === "error").length;
   const warnCount = issues.filter((i) => i.severity === "warning").length;
@@ -412,6 +511,14 @@ export default function Viewer() {
           onParsedSample={() => {
             loadScene(sampleParsedScene, "parsed");
             setStarted(true);
+            const src = sampleParsedScene.pages?.[0]?.sourceFile;
+            if (src) {
+              fetch(`/plans/${encodeURIComponent(src)}`)
+                .then((r) => (r.ok ? r.blob() : null))
+                .then((b) => (b ? fileToImageIn(new File([b], src, { type: b.type || "image/jpeg" })) : null))
+                .then((img) => setPlanImages(img ? [img] : []))
+                .catch(() => {});
+            }
           }}
           onClose={() => setStarted(true)}
           error={error}
@@ -495,8 +602,9 @@ export default function Viewer() {
         <button
           style={{ ...styles.modeBtn, ...(mode === "walk" ? styles.modeBtnActive : {}) }}
           onClick={() => setMode("walk")}
+          title="Walk through the café: numbered stops, guided tour, mini-map"
         >
-          Walk
+          🚶 Walk tour
         </button>
       </div>
 
@@ -511,6 +619,7 @@ export default function Viewer() {
 
       {/* Render / export panel */}
       <div style={styles.renderPanel}>
+        <button style={styles.rbtnAccent} onClick={() => setDesignPanel(true)} title="Claude designs the interior from the plan + references and writes a complete walkable 3D tour">🎨 AI design tour</button>
         <button style={styles.rbtn} onClick={dollhouse} title="Isometric dollhouse view (Reference B)">🏠 Dollhouse</button>
         <button style={styles.rbtn} onClick={downloadPng} title="Export the current view as a PNG">📸 Download PNG</button>
         <button style={styles.rbtnAccent} disabled={tourBusy || renderBusy} onClick={() => generateTour()} title="Build a walkable photoreal 360° tour in Blender">
@@ -524,6 +633,22 @@ export default function Viewer() {
         </button>
         {renderMsg && <div style={styles.renderMsg}>{renderMsg}</div>}
       </div>
+
+      {designPanel && (
+        <DesignTourPanel
+          scene={scene}
+          planImages={planImages}
+          onClose={() => setDesignPanel(false)}
+          onOpen={(u) => {
+            setDesignPanel(false);
+            setDesignUrl(u);
+          }}
+          onBlenderResult={(r) => {
+            setDesignPanel(false);
+            setBlenderResult(r);
+          }}
+        />
+      )}
 
       {/* Building-tour overlay with live progress */}
       {tourBusy && (
@@ -669,6 +794,15 @@ const styles: Record<string, CSSProperties> = {
   progTrack: { width: "100%", height: 8, borderRadius: 999, background: "rgba(255,255,255,0.1)", overflow: "hidden" },
   progFill: { height: "100%", borderRadius: 999, background: "linear-gradient(90deg,#ffb347,#ffce8f)", transition: "width 0.4s ease" },
   tourCancel: { marginTop: 18, background: "rgba(255,255,255,0.08)", color: "#e8e0d2", border: "1px solid rgba(255,255,255,0.18)", padding: "7px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 600 },
+  designBar: { position: "absolute", top: 12, left: 12, right: 12, display: "flex", alignItems: "center", gap: 8, pointerEvents: "none", zIndex: 5, flexWrap: "wrap" },
+  gallery: { padding: "70px 24px 40px", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(420px, 1fr))", gap: 18 },
+  galleryItem: { margin: 0, background: "#1e1915", borderRadius: 12, overflow: "hidden", cursor: "zoom-in", boxShadow: "0 8px 30px rgba(0,0,0,0.4)" },
+  galleryImg: { width: "100%", display: "block", aspectRatio: "16/9", objectFit: "cover" },
+  galleryCap: { padding: "10px 12px", color: "#e8dfd0", fontSize: 13 },
+  galleryNote: { gridColumn: "1 / -1", color: "#c7bdac", fontSize: 13, padding: 12 },
+  designBadge: { background: "rgba(20,17,14,0.78)", color: "#ffd9a0", border: "1px solid rgba(255,210,150,0.25)", padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 700, backdropFilter: "blur(8px)", pointerEvents: "auto" },
+  designLink: { pointerEvents: "auto", background: "rgba(20,17,14,0.78)", color: "#f3ece0", border: "1px solid rgba(255,255,255,0.18)", padding: "6px 12px", borderRadius: 999, fontSize: 13, cursor: "pointer", textDecoration: "none", backdropFilter: "blur(8px)" },
+  designExit: { marginLeft: "auto", pointerEvents: "auto", background: "rgba(20,17,14,0.78)", color: "#f3ece0", border: "1px solid rgba(255,255,255,0.18)", padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", backdropFilter: "blur(8px)" },
   dnd: { position: "absolute", inset: 0, zIndex: 40, display: "grid", placeItems: "center", background: "rgba(154,107,47,0.14)", border: "3px dashed #9a6b2f", pointerEvents: "none" },
   dndCard: { background: "#fff", padding: "16px 24px", borderRadius: 12, fontWeight: 700, color: "#23201b", boxShadow: "0 8px 30px rgba(0,0,0,0.2)" },
   issues: { position: "absolute", bottom: 18, right: 18, width: 320, maxHeight: "45vh", overflow: "hidden", display: "flex", flexDirection: "column", background: "rgba(255,255,255,0.92)", backdropFilter: "blur(8px)", borderRadius: 12, boxShadow: "0 6px 26px rgba(0,0,0,0.16)" },
