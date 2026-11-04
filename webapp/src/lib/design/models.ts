@@ -23,6 +23,9 @@ export interface ModelDef {
 }
 
 const M = "/models/kenney";
+// Custom café fixture library — built in Blender (procedural + Poly Haven PBR), exported
+// 1K/WebP GLB. Realistic, café-specific. Files in webapp/public/models/custom/.
+const C = "/models/custom";
 
 /**
  * Kenney Furniture Kit pieces are authored facing +Z. We need the "front" to face local
@@ -86,50 +89,94 @@ export const MODEL_CATALOG: Record<string, ModelDef> = {
   desk: { url: `${M}/desk.glb`, baseRotationDeg: F, fit: "contain" },
   desk_chair: { url: `${M}/chairDesk.glb`, baseRotationDeg: F, fit: "contain" },
   console: { url: `${M}/cabinetTelevision.glb`, baseRotationDeg: F, fit: "contain" },
+
+  // ── Custom café library (webapp/public/models/custom/) ───────────────────────────
+  // Directional pieces face +Z after glTF export → use F (180°); radially-symmetric → 0.
+  cafe_chair: { url: `${C}/chair.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_table: { url: `${C}/table.glb`, baseRotationDeg: 0, fit: "contain" },
+  cafe_counter: { url: `${C}/counter.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_cart: { url: `${C}/coffeeCart.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_sink: { url: `${C}/sink.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_handwash_sink: { url: `${C}/handWashSink.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_shelving: { url: `${C}/shelving.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_waste_bin: { url: `${C}/wasteBin.glb`, baseRotationDeg: 0, fit: "contain" },
+  cafe_fridge: { url: `${C}/fridge.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_freezer: { url: `${C}/freezer.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_dishwasher: { url: `${C}/dishwasher.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_microwave: { url: `${C}/microwave.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_espresso: { url: `${C}/espressoMachine.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_grinder: { url: `${C}/coffeeGrinder.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_blender: { url: `${C}/blenderMachine.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_pos: { url: `${C}/posTerminal.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_display_case: { url: `${C}/displayCase.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_panini: { url: `${C}/paniniPress.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_water_filter: { url: `${C}/waterFilter.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_grease_trap: { url: `${C}/greaseTrap.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_electrical_panel: { url: `${C}/electricalPanel.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_fire_extinguisher: { url: `${C}/fireExtinguisher.glb`, baseRotationDeg: 0, fit: "contain" },
+  cafe_hvac: { url: `${C}/hvacUnit.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_spotlights: { url: `${C}/spotlights.glb`, baseRotationDeg: 0, fit: "contain" },
+  cafe_speaker: { url: `${C}/speaker.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_signage: { url: `${C}/signage.glb`, baseRotationDeg: F, fit: "contain" },
 };
 
 /** Default model per category (first variant). Used when a fixture has no explicit modelKey. */
 export const MODEL_REGISTRY: Partial<Record<FixtureCategory, ModelDef>> = {
-  chair: MODEL_CATALOG.chair_cushion,
+  // Café-specific custom models now lead; Kenney kept as fallback/variants.
+  chair: MODEL_CATALOG.cafe_chair,
   stool: MODEL_CATALOG.stool_bar,
   sofa: MODEL_CATALOG.sofa,
   banquette: MODEL_CATALOG.bench_cushion,
-  // table → parametric marble bistro table (FurnitureModels.tsx), matches the reference renders.
-  fridge: MODEL_CATALOG.fridge,
-  freezer: MODEL_CATALOG.fridge_large,
+  table: MODEL_CATALOG.cafe_table, // round bistro (real oak); revert to parametric by removing this line
+  counter: MODEL_CATALOG.cafe_counter,
+  cashier: MODEL_CATALOG.cafe_pos,
+  fridge: MODEL_CATALOG.cafe_fridge,
+  freezer: MODEL_CATALOG.cafe_freezer,
   ice_maker: MODEL_CATALOG.fridge_small,
-  espresso_machine: MODEL_CATALOG.coffee_machine,
-  grinder: MODEL_CATALOG.blender,
-  blender: MODEL_CATALOG.blender,
-  mixer: MODEL_CATALOG.blender,
+  espresso_machine: MODEL_CATALOG.cafe_espresso,
+  grinder: MODEL_CATALOG.cafe_grinder,
+  blender: MODEL_CATALOG.cafe_blender,
+  mixer: MODEL_CATALOG.cafe_blender,
   oven: MODEL_CATALOG.stove,
-  sink: MODEL_CATALOG.kitchen_sink,
-  dishwasher: MODEL_CATALOG.washer,
-  shelving: MODEL_CATALOG.bookcase,
+  sink: MODEL_CATALOG.cafe_sink,
+  dishwasher: MODEL_CATALOG.cafe_dishwasher,
+  display_case: MODEL_CATALOG.cafe_display_case,
+  cooling_case: MODEL_CATALOG.cafe_display_case,
+  shelving: MODEL_CATALOG.cafe_shelving,
+  signage: MODEL_CATALOG.cafe_signage,
   plant: MODEL_CATALOG.plant_potted,
   monitor: MODEL_CATALOG.tv,
   toilet: MODEL_CATALOG.toilet,
-  // Parametric fallbacks (kept on purpose): counter, cashier, display_case, cooling_case,
-  // boiler, menu_board, signage, pendant_light, umbrella, generic.
+  // Still parametric/fallback: boiler, menu_board, pendant_light, umbrella, generic.
+  // Extra custom models reachable by modelKey (no 1:1 category): cafe_microwave,
+  // cafe_panini, cafe_water_filter, cafe_grease_trap, cafe_electrical_panel,
+  // cafe_fire_extinguisher, cafe_hvac, cafe_spotlights, cafe_speaker, cafe_cart,
+  // cafe_handwash_sink, cafe_waste_bin.
 };
 
 /** Which catalog keys the AI layout pass may choose from, per category. */
 export const VARIANTS_BY_CATEGORY: Partial<Record<FixtureCategory, string[]>> = {
-  chair: ["chair_cushion", "chair_wood"],
+  chair: ["cafe_chair", "chair_cushion", "chair_wood"],
   stool: ["stool_bar"],
   sofa: ["sofa", "sofa_long"],
   banquette: ["bench_cushion", "sofa_long"],
-  fridge: ["fridge", "fridge_large", "fridge_small"],
-  freezer: ["fridge_large", "fridge"],
+  table: ["cafe_table", "table_round", "table_rect"],
+  counter: ["cafe_counter"],
+  cashier: ["cafe_pos"],
+  fridge: ["cafe_fridge", "fridge", "fridge_large"],
+  freezer: ["cafe_freezer", "fridge_large"],
   ice_maker: ["fridge_small"],
-  espresso_machine: ["coffee_machine"],
-  grinder: ["blender"],
-  blender: ["blender"],
-  mixer: ["blender"],
-  oven: ["stove"],
-  sink: ["kitchen_sink", "bathroom_sink"],
-  dishwasher: ["washer"],
-  shelving: ["bookcase", "cabinet"],
+  espresso_machine: ["cafe_espresso", "coffee_machine"],
+  grinder: ["cafe_grinder"],
+  blender: ["cafe_blender"],
+  mixer: ["cafe_blender"],
+  oven: ["cafe_microwave", "stove"],
+  sink: ["cafe_sink", "cafe_handwash_sink", "kitchen_sink"],
+  dishwasher: ["cafe_dishwasher", "washer"],
+  display_case: ["cafe_display_case"],
+  cooling_case: ["cafe_display_case"],
+  shelving: ["cafe_shelving", "bookcase", "cabinet"],
+  signage: ["cafe_signage"],
   plant: ["plant_potted", "plant_small"],
   monitor: ["tv"],
   toilet: ["toilet"],
