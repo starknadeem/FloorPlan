@@ -75,7 +75,7 @@ K.wall_sconce((10.87, 13.0), rot=90, z=1.8, name="sconce_d2")
 K.wall_shelf((10.2, 13.245), rot=180, z=1.5, w=1.0, name="shelf_dining")
 K.rug((7.4, 12.2), w=4.0, d=1.4, name="rug_dining")
 K.plant((0.45, 12.8), h=1.3, name="plant_dining")
-K.sign("coffee berry", (5.5, 10.05), rot=0, z=2.85, size=0.4, mat="walnut", name="fascia")   # outer facade face  # over the glazing, read from the street
+K.sign("coffee berry", (5.5, 10.05), rot=180, z=2.85, size=0.4, mat="walnut", name="fascia")   # outer facade face, read from the street (street on the left of rot)  # over the glazing, read from the street
 
 # ---- terrace: branded umbrellas, 4-tops, olive trees, planters along the street edge ----------
 for i, (x, y) in enumerate(((2.6, 4.6), (8.3, 4.6))):

@@ -77,6 +77,25 @@ def point_in_poly(poly, x, y):
     return inside
 
 
+def project_uvs(bm, scale=1.0):
+    """Per-face planar UVs in metres (dominant-axis projection), so tiled textures read at life size
+    and survive glTF export (which needs real UV coordinates)."""
+    uv = bm.loops.layers.uv.verify()
+    for f in bm.faces:
+        n = f.normal
+        ax, ay, az = abs(n.x), abs(n.y), abs(n.z)
+        for loop in f.loops:
+            c = loop.vert.co
+            if az >= ax and az >= ay:
+                u, v = c.x, c.y
+            elif ax >= ay:
+                u, v = c.y, c.z
+            else:
+                u, v = c.x, c.z
+            loop[uv].uv = (u * scale, v * scale)
+    return bm
+
+
 # ----------------------------------------------------------------------------------------------
 # the kit
 # ----------------------------------------------------------------------------------------------
@@ -161,8 +180,39 @@ class Kit:
         self.mats[name] = m
         return m
 
+    def _tinted(self, img, tint, roughness_mul=None):
+        """A packed copy of `img` multiplied by `tint` (or, for roughness maps, scaled by roughness_mul),
+        so the colour survives glTF export (the exporter cannot bake node maths)."""
+        key = (img.name, tint, roughness_mul)
+        if key in self._img_cache:
+            return self._img_cache[key]
+        if (tint in (None, "#ffffff") and not roughness_mul) or (roughness_mul == 1.0):
+            self._img_cache[key] = img
+            return img
+        import numpy as np
+        t = img.copy()
+        t.name = f"{img.name}_{(tint or 'r').strip('#')}{'' if roughness_mul is None else f'_r{roughness_mul}'}"
+        px = np.empty(len(t.pixels), dtype=np.float32)
+        t.pixels.foreach_get(px)
+        px = px.reshape(-1, 4)
+        if roughness_mul is not None:
+            px[:, :3] = np.clip(px[:, :3] * roughness_mul, 0.0, 1.0)
+        else:
+            h = tint.lstrip("#")
+            c = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+            px[:, :3] *= np.array(c, dtype=np.float32)
+        t.pixels.foreach_set(px.ravel())
+        t.update()
+        try:
+            t.pack()
+        except Exception:
+            pass
+        self._img_cache[key] = t
+        return t
+
     def mat_pbr(self, name, folder, tint="#ffffff", scale=1.0, roughness_mul=1.0, metallic=0.0):
-        """PBR from textures/<folder>/{color,normal,rough}.jpg, tinted and tiled (scale = tiles/m)."""
+        """PBR from textures/<folder>/{color,normal,rough}.jpg, tinted and tiled (scale = tiles/m).
+        Built the way the glTF exporter understands: UV → Mapping → Image → Principled."""
         if name in self.mats:
             return self.mats[name]
         m = bpy.data.materials.new(name)
@@ -179,36 +229,22 @@ class Kit:
             return m
         texco = nt.nodes.new("ShaderNodeTexCoord")
         mapping = nt.nodes.new("ShaderNodeMapping")
-        mapping.inputs["Scale"].default_value = (scale, scale, scale)
-        # object-space mapping: no UVs needed on boxes, texture stays life-sized
-        nt.links.new(texco.outputs["Object"], mapping.inputs["Vector"])
+        mapping.inputs["Scale"].default_value = (scale, scale, 1.0)
+        nt.links.new(texco.outputs["UV"], mapping.inputs["Vector"])
         cnode = nt.nodes.new("ShaderNodeTexImage")
-        cnode.image = col
-        cnode.projection = "BOX"
-        cnode.projection_blend = 0.2
+        cnode.image = self._tinted(col, tint)
         nt.links.new(mapping.outputs["Vector"], cnode.inputs["Vector"])
-        mix = nt.nodes.new("ShaderNodeMix")
-        mix.data_type = "RGBA"
-        mix.blend_type = "MULTIPLY"
-        mix.inputs["Factor"].default_value = 1.0
-        nt.links.new(cnode.outputs["Color"], mix.inputs[6])
-        mix.inputs[7].default_value = hex_to_linear(tint)
-        nt.links.new(mix.outputs[2], p.inputs["Base Color"])
+        nt.links.new(cnode.outputs["Color"], p.inputs["Base Color"])
         rough = self._img(os.path.join(base, "rough.jpg"))
         if rough:
-            rough.colorspace_settings.name = "Non-Color"
+            rimg = self._tinted(rough, None, roughness_mul)
+            rimg.colorspace_settings.name = "Non-Color"
             rnode = nt.nodes.new("ShaderNodeTexImage")
-            rnode.image = rough
-            rnode.projection = "BOX"
+            rnode.image = rimg
             nt.links.new(mapping.outputs["Vector"], rnode.inputs["Vector"])
-            if roughness_mul != 1.0:
-                mm = nt.nodes.new("ShaderNodeMath")
-                mm.operation = "MULTIPLY"
-                mm.inputs[1].default_value = roughness_mul
-                nt.links.new(rnode.outputs["Color"], mm.inputs[0])
-                nt.links.new(mm.outputs[0], p.inputs["Roughness"])
-            else:
-                nt.links.new(rnode.outputs["Color"], p.inputs["Roughness"])
+            sep = nt.nodes.new("ShaderNodeSeparateColor")
+            nt.links.new(rnode.outputs["Color"], sep.inputs["Color"])
+            nt.links.new(sep.outputs["Green"], p.inputs["Roughness"])
         else:
             p.inputs["Roughness"].default_value = 0.8 * roughness_mul
         nrm = self._img(os.path.join(base, "normal.jpg"))
@@ -216,7 +252,6 @@ class Kit:
             nrm.colorspace_settings.name = "Non-Color"
             nnode = nt.nodes.new("ShaderNodeTexImage")
             nnode.image = nrm
-            nnode.projection = "BOX"
             nmap = nt.nodes.new("ShaderNodeNormalMap")
             nmap.inputs["Strength"].default_value = 0.6
             nt.links.new(mapping.outputs["Vector"], nnode.inputs["Vector"])
@@ -225,24 +260,10 @@ class Kit:
         self.mats[name] = m
         return m
 
-    def mat_checker(self, name, c1, c2, scale=0.3):
-        """Two-tone checker floor (object-space, scale = tile size in m)."""
-        if name in self.mats:
-            return self.mats[name]
-        m = bpy.data.materials.new(name)
-        m.use_nodes = True
-        nt = m.node_tree
-        p = _principled(m)
-        texco = nt.nodes.new("ShaderNodeTexCoord")
-        ck = nt.nodes.new("ShaderNodeTexChecker")
-        ck.inputs["Scale"].default_value = 1.0 / scale
-        ck.inputs["Color1"].default_value = hex_to_linear(c1)
-        ck.inputs["Color2"].default_value = hex_to_linear(c2)
-        nt.links.new(texco.outputs["Object"], ck.inputs["Vector"])
-        nt.links.new(ck.outputs["Color"], p.inputs["Base Color"])
-        p.inputs["Roughness"].default_value = 0.35
-        self.mats[name] = m
-        return m
+    def mat_checker(self, name, c1="#e9e2d6", c2="#3a3632", scale=0.3):
+        """Two-tone checker tile floor from textures/checker (a real image, so it exports to glTF).
+        One image = 2×2 tiles of `scale` metres; c1/c2 are kept for API compatibility."""
+        return self.mat_pbr(name, "checker", "#ffffff", scale=1.0 / (2 * scale), roughness_mul=0.5)
 
     def _build_materials(self):
         M = self.mats
@@ -315,10 +336,12 @@ class Kit:
         mesh = bpy.data.meshes.new(name)
         bm = bmesh.new()
         bmesh.ops.create_cube(bm, size=1.0)
+        bmesh.ops.scale(bm, vec=(max(size[0], 1e-4), max(size[1], 1e-4), max(size[2], 1e-4)), verts=bm.verts)
+        bm.normal_update()
+        project_uvs(bm)
         bm.to_mesh(mesh)
         bm.free()
         o = bpy.data.objects.new(name, mesh)
-        o.scale = (size[0], size[1], size[2])
         o.location = loc
         o.rotation_euler = (0, 0, math.radians(rot))
         if mat:
@@ -331,8 +354,12 @@ class Kit:
         mesh = bpy.data.meshes.new(name)
         bm = bmesh.new()
         bmesh.ops.create_cone(bm, cap_ends=True, segments=segments, radius1=r, radius2=r if r_top is None else r_top, depth=h)
+        bm.normal_update()
+        project_uvs(bm)
         bm.to_mesh(mesh)
         bm.free()
+        for poly in mesh.polygons:
+            poly.use_smooth = segments >= 12 and len(poly.vertices) == 4
         o = bpy.data.objects.new(name, mesh)
         o.location = (loc[0], loc[1], loc[2] + h / 2)
         o.rotation_euler = tuple(math.radians(a) for a in rot)
@@ -345,6 +372,8 @@ class Kit:
         mesh = bpy.data.meshes.new(name)
         bm = bmesh.new()
         bmesh.ops.create_icosphere(bm, subdivisions=2, radius=r)
+        bm.normal_update()
+        project_uvs(bm)
         bm.to_mesh(mesh)
         bm.free()
         o = bpy.data.objects.new(name, mesh)
@@ -374,6 +403,8 @@ class Kit:
             r = bmesh.ops.extrude_face_region(bm, geom=[face])
             vs = [g for g in r["geom"] if isinstance(g, bmesh.types.BMVert)]
             bmesh.ops.translate(bm, verts=vs, vec=(0, 0, -thickness))
+        bm.normal_update()
+        project_uvs(bm)
         bm.to_mesh(mesh)
         bm.free()
         o = bpy.data.objects.new(name, mesh)
@@ -383,7 +414,10 @@ class Kit:
         return o
 
     def text(self, name, body, loc, rot=0.0, size=0.3, mat=None, extrude=0.01, align="CENTER", upright=True, coll=None):
-        """3D text (brand wordmark, menu headings). upright=True stands it on a wall (rot = wall direction)."""
+        """3D text (brand wordmark, menu headings). upright=True stands it on a wall: `rot` is the wall
+        direction and the text FACES THE LEFT of that direction (the room side, like every run), so it
+        reads correctly from the room. A fascia read from the street uses the direction with the street
+        on its left."""
         cu = bpy.data.curves.new(name, "FONT")
         cu.body = body
         cu.size = size
@@ -391,7 +425,7 @@ class Kit:
         cu.align_x = align
         o = bpy.data.objects.new(name, cu)
         o.location = loc
-        o.rotation_euler = (math.radians(90) if upright else 0, 0, math.radians(rot))
+        o.rotation_euler = (math.radians(90) if upright else 0, 0, math.radians(rot + 180 if upright else rot))
         if mat:
             o.data.materials.append(mat)
         (coll or self.coll).objects.link(o)
@@ -546,6 +580,8 @@ class Kit:
                 bmesh.ops.translate(bm, verts=res["verts"], vec=(x, y, z + 0.065))
                 res2 = bmesh.ops.create_cone(bm, cap_ends=False, segments=12, radius1=0.041, radius2=0.0465, depth=0.05)
                 bmesh.ops.translate(bm, verts=res2["verts"], vec=(x, y, z + 0.065))
+        bm.normal_update()
+        project_uvs(bm)
         mesh = bpy.data.meshes.new(name)
         bm.to_mesh(mesh)
         bm.free()
@@ -655,19 +691,45 @@ class Kit:
             z = 0.12 + i * (h - 0.4) / max(1, levels - 1)
             self.box(f"{name}_shelf{i}", (L - 0.06, depth - 0.04, 0.025), (cx, cy, z), ang, self.M("black_steel"), g)
             if products:
-                u = 0.12
-                while u < L - 0.12:
-                    w_ = 0.07 + self.rng.random() * 0.06; hh = 0.12 + self.rng.random() * 0.14
-                    col = pal[self.rng.randrange(len(pal))]
-                    m = self.mat_plain(f"product_{col}", col, roughness=0.7)
-                    x, y = a[0] + ux * (u + w_ / 2) + nx * (depth * 0.5), a[1] + uy * (u + w_ / 2) + ny * (depth * 0.5)
-                    self.box(f"{name}_product", (w_, 0.07 + self.rng.random() * 0.05, hh), (x, y, z + 0.0125 + hh / 2), ang, m, self._collection("Props"))
-                    u += w_ + 0.035 + self.rng.random() * 0.05
+                self.products_on_shelf(a, b, z + 0.0125, depth, side=side, name=f"{name}_lv{i}")
+        return g
+
+    def products_on_shelf(self, a, b, z, depth=0.35, side=1, name="products"):
+        """Styled merchandise along a shelf: coffee bags with labels, glass jars of beans, tins, book stacks."""
+        (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
+        g = self._collection("Props")
+        pal = ["#b48a5a", "#2a2420", "#3e5c44", "#efe8dc", "#7a4a2c", "#9b2d20"]
+        u = 0.12
+        k = 0
+        while u < L - 0.14:
+            x, y = a[0] + ux * u + nx * (depth * 0.5), a[1] + uy * u + ny * (depth * 0.5)
+            kind = k % 5
+            if kind in (0, 3):      # coffee bag with a label band
+                col = pal[self.rng.randrange(len(pal))]
+                self.box(f"{name}_bag", (0.11, 0.07, 0.2), (x + ux * 0.055, y + uy * 0.055, z + 0.1), ang + self.rng.uniform(-6, 6), self.mat_plain(f"bag_{col}", col, 0.75), g)
+                self.box(f"{name}_label", (0.08, 0.072, 0.06), (x + ux * 0.055, y + uy * 0.055, z + 0.09), ang, self.M("paper"), g)
+                u += 0.17
+            elif kind == 1:         # glass jar of beans with a wooden lid
+                self.cyl(f"{name}_jar", 0.045, 0.17, (x + ux * 0.05, y + uy * 0.05, z), self.M("display_glass"), 16, coll=g)
+                self.cyl(f"{name}_beans", 0.04, 0.13, (x + ux * 0.05, y + uy * 0.05, z + 0.005), self.M("beans"), 12, coll=g)
+                self.cyl(f"{name}_lid", 0.047, 0.025, (x + ux * 0.05, y + uy * 0.05, z + 0.17), self.M("oak"), 16, coll=g)
+                u += 0.14
+            elif kind == 2:         # tin
+                col = pal[self.rng.randrange(len(pal))]
+                self.cyl(f"{name}_tin", 0.04, 0.14, (x + ux * 0.045, y + uy * 0.045, z), self.mat_plain(f"tin_{col}", col, 0.35, 0.6), 16, coll=g)
+                self.cyl(f"{name}_tinlid", 0.041, 0.01, (x + ux * 0.045, y + uy * 0.045, z + 0.14), self.M("steel"), 16, coll=g)
+                u += 0.13
+            else:                   # small stack of books
+                for j in range(3):
+                    self.box(f"{name}_book", (0.16, 0.12, 0.025), (x + ux * 0.08, y + uy * 0.08, z + 0.0125 + j * 0.027), ang + self.rng.uniform(-10, 10), self.mat_plain(f"book{j}", ("#3e5c44", "#9b2d20", "#2a2420")[j], 0.8), g)
+                u += 0.24
+            k += 1
         return g
 
     # ---------------- seating ----------------
     def chair(self, at, rot=0.0, seat_mat="boucle", frame="oak", name="chair"):
-        """Bentwood-style café chair at `at`, facing `rot` (the back is behind)."""
+        """Bentwood-style café chair at `at`. It faces the direction (sin rot, -cos rot): rot=0 faces
+        south (-y), 90 faces east (+x), 180 faces north (+y), -90 faces west (-x)."""
         g = self._collection("Seating")
         r = math.radians(rot)
         def P(dx, dy, dz=0.0):
@@ -696,7 +758,8 @@ class Kit:
             for i in range(chairs):
                 a = 2 * math.pi * i / chairs + math.pi / 2
                 cx, cy = at[0] + math.cos(a) * cr, at[1] + math.sin(a) * cr
-                self.chair((cx, cy), math.degrees(a) + 90, seat_mat=seat_mat, name=f"{name}_chair{i}")
+                # chair() faces local -y rotated by rot: facing (sin rot, -cos rot) = toward the centre
+                self.chair((cx, cy), math.degrees(a) - 90, seat_mat=seat_mat, name=f"{name}_chair{i}")
         else:
             w, d = size if isinstance(size, (tuple, list)) else (size, size * 0.6)
             self.box(f"{name}_top", (w, d, 0.03), (at[0], at[1], h - 0.015), 0, self.M(top), g)
@@ -706,8 +769,8 @@ class Kit:
             per_side = max(1, chairs // 2)
             for i in range(per_side):
                 x = at[0] - w / 2 + w * (i + 0.5) / per_side
-                self.chair((x, at[1] - d / 2 - 0.3), 0, seat_mat=seat_mat, name=f"{name}_chair_s{i}")
-                self.chair((x, at[1] + d / 2 + 0.3), 180, seat_mat=seat_mat, name=f"{name}_chair_n{i}")
+                self.chair((x, at[1] - d / 2 - 0.3), 180, seat_mat=seat_mat, name=f"{name}_chair_s{i}")   # south side faces north
+                self.chair((x, at[1] + d / 2 + 0.3), 0, seat_mat=seat_mat, name=f"{name}_chair_n{i}")     # north side faces south
         return g
 
     def stool(self, at, h=0.75, name="stool"):
@@ -763,6 +826,8 @@ class Kit:
             bmesh.ops.scale(bm, vec=(slat, depth, h), verts=vs)
             bmesh.ops.rotate(bm, cent=(0, 0, 0), matrix=__import__("mathutils").Matrix.Rotation(math.radians(ang), 3, "Z"), verts=vs)
             bmesh.ops.translate(bm, verts=vs, vec=(a[0] + ux * u + nx * (depth / 2 + (0.02 if backing else 0)), a[1] + uy * u + ny * (depth / 2 + (0.02 if backing else 0)), z0 + h / 2))
+        bm.normal_update()
+        project_uvs(bm)
         mesh = bpy.data.meshes.new(name)
         bm.to_mesh(mesh)
         bm.free()
@@ -794,6 +859,8 @@ class Kit:
                 res = bmesh.ops.create_cube(bm, size=1.0)
                 bmesh.ops.scale(bm, vec=(0.04, d, 0.12), verts=res["verts"])
                 bmesh.ops.translate(bm, verts=res["verts"], vec=(x, cy, z - drop / 2))
+            bm.normal_update()
+            project_uvs(bm)
             mesh = bpy.data.meshes.new(name)
             bm.to_mesh(mesh)
             bm.free()
@@ -955,6 +1022,8 @@ class Kit:
             res = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=1.0)
             bmesh.ops.scale(bm, vec=(0.24, w * 0.45, hedge_h * 0.5), verts=res["verts"])
             bmesh.ops.translate(bm, verts=res["verts"], vec=(a[0] + ux * u, a[1] + uy * u, h + hedge_h * 0.35))
+        bm.normal_update()
+        project_uvs(bm)
         mesh = bpy.data.meshes.new(name)
         bm.to_mesh(mesh)
         bm.free()
@@ -973,6 +1042,8 @@ class Kit:
             zz = z - sag * math.sin(math.pi * t)
             res = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=0.035)
             bmesh.ops.translate(bm, verts=res["verts"], vec=(a[0] + ux * L * t, a[1] + uy * L * t, zz))
+        bm.normal_update()
+        project_uvs(bm)
         mesh = bpy.data.meshes.new(name)
         bm.to_mesh(mesh)
         bm.free()

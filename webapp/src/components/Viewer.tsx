@@ -387,7 +387,7 @@ export default function Viewer() {
   if (blenderResult) {
     const r = blenderResult;
     return (
-      <div style={{ ...styles.root, background: "#141110", overflowY: "auto" }}>
+      <div style={{ ...styles.root, background: "#141110", overflow: "auto" }}>
         <div style={styles.designBar}>
           <span style={styles.designBadge}>🏗️ AI design in Blender · {scene.project.name}</span>
           {r.glbUrl && r.sceneUrl && (

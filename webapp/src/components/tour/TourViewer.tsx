@@ -160,6 +160,6 @@ const styles: Record<string, CSSProperties> = {
   exitBtn: { marginLeft: "auto", pointerEvents: "auto", background: "rgba(20,17,14,0.72)", color: "#f3ece0", border: "1px solid rgba(255,255,255,0.18)", padding: "6px 12px", borderRadius: 8, fontSize: 13, cursor: "pointer", backdropFilter: "blur(8px)" },
   nav: { position: "absolute", bottom: 46, left: "50%", transform: "translateX(-50%)", display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 8, maxWidth: "90vw", padding: 8, background: "rgba(20,17,14,0.7)", borderRadius: 12, backdropFilter: "blur(8px)" },
   navBtn: { border: "1px solid rgba(255,255,255,0.16)", background: "rgba(255,255,255,0.06)", color: "#e8e0d2", padding: "7px 13px", borderRadius: 8, fontSize: 13, cursor: "pointer", fontWeight: 600, textTransform: "capitalize" },
-  navBtnActive: { background: "#ffce8f", color: "#2a1d0c", borderColor: "#ffce8f" },
+  navBtnActive: { background: "#ffce8f", color: "#2a1d0c", border: "1px solid #ffce8f" },
   hint: { position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", color: "rgba(255,255,255,0.6)", fontSize: 12 },
 };
