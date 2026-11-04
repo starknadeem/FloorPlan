@@ -114,7 +114,7 @@ function lineAlongWalls(room: Room, items: Item[], occ: Disc[], out: Fixture[]) 
   }
 }
 
-const CHAIR: Item = { key: "chair_cushion", cat: "chair", w: 0.5, d: 0.5, h: 0.9, name: "Chair" };
+const CHAIR: Item = { key: "cafe_chair", cat: "chair", w: 0.5, d: 0.5, h: 0.9, name: "Chair" };
 function seatTables(scene: CafeScene, occ: Disc[], out: Fixture[]) {
   const roomsByTable = (f: Fixture) => scene.rooms.find((r) => pointInPoly(r.polygon, f.position[0], f.position[1]));
   for (const t of scene.fixtures) {
@@ -179,28 +179,33 @@ function cornerProps(room: Room, items: Item[], occ: Disc[], out: Fixture[]) {
 
 // ---- item presets ----
 const I = {
-  stove: { key: "stove", cat: "oven", w: 0.9, d: 0.7, h: 0.9, name: "Stove" } as Item,
-  fridge: { key: "fridge", cat: "fridge", w: 0.7, d: 0.7, h: 1.9, name: "Fridge" } as Item,
-  freezer: { key: "fridge_large", cat: "freezer", w: 0.9, d: 0.72, h: 1.45, name: "Freezer" } as Item,
-  sink: { key: "kitchen_sink", cat: "sink", w: 0.6, d: 0.6, h: 0.9, name: "Sink" } as Item,
-  dishwasher: { key: "washer", cat: "dishwasher", w: 0.6, d: 0.62, h: 0.85, name: "Dishwasher" } as Item,
-  prepCab: { key: "cabinet", cat: "counter", w: 1.0, d: 0.6, h: 0.9, name: "Prep counter" } as Item,
-  crockery: { key: "crockery_cabinet", cat: "shelving", w: 0.7, d: 0.32, h: 1.9, name: "Crockery cabinet" } as Item,
-  shelving: { key: "bookcase", cat: "shelving", w: 0.8, d: 0.3, h: 1.8, name: "Shelving" } as Item,
-  trashcan: { key: "trashcan", cat: "generic", w: 0.45, d: 0.45, h: 0.9, name: "Bin" } as Item,
+  stove: { key: "stove", cat: "oven", w: 0.9, d: 0.7, h: 0.9, name: "Oven" } as Item,
+  fridge: { key: "cafe_fridge", cat: "fridge", w: 0.7, d: 0.72, h: 1.9, name: "Fridge" } as Item,
+  freezer: { key: "cafe_freezer", cat: "freezer", w: 0.7, d: 0.7, h: 1.1, name: "Freezer" } as Item,
+  sink: { key: "cafe_sink", cat: "sink", w: 0.6, d: 0.6, h: 0.9, name: "Sink" } as Item,
+  dishwasher: { key: "cafe_dishwasher", cat: "dishwasher", w: 0.6, d: 0.6, h: 0.85, name: "Dishwasher" } as Item,
+  prepCab: { key: "cafe_counter", cat: "counter", w: 1.0, d: 0.6, h: 0.9, name: "Prep counter" } as Item,
+  crockery: { key: "cafe_shelving", cat: "shelving", w: 1.0, d: 0.4, h: 1.8, name: "Crockery shelving" } as Item,
+  shelving: { key: "cafe_shelving", cat: "shelving", w: 1.0, d: 0.4, h: 1.8, name: "Shelving" } as Item,
+  trashcan: { key: "cafe_waste_bin", cat: "generic", w: 0.5, d: 0.5, h: 0.7, name: "Waste bin" } as Item,
   hood: { key: "hood", cat: "generic", w: 0.9, d: 0.45, h: 0.45, base: 1.5, name: "Extractor hood" } as Item,
   box: { key: "box", cat: "generic", w: 0.45, d: 0.45, h: 0.6, name: "Storage box" } as Item,
   plant: { key: "plant_potted", cat: "plant", w: 0.45, d: 0.45, h: 1.1, name: "Plant" } as Item,
   toilet: { key: "toilet", cat: "toilet", w: 0.65, d: 0.72, h: 0.75, name: "Toilet" } as Item,
-  basin: { key: "bathroom_sink", cat: "sink", w: 0.5, d: 0.42, h: 0.85, name: "Basin" } as Item,
+  basin: { key: "cafe_handwash_sink", cat: "sink", w: 0.4, d: 0.35, h: 0.85, name: "Hand-wash basin" } as Item,
   mirror: { key: "mirror", cat: "generic", w: 0.5, d: 0.12, h: 0.6, base: 1.2, name: "Mirror" } as Item,
   coatRack: { key: "coat_rack", cat: "generic", w: 0.4, d: 0.4, h: 1.7, name: "Coat rack" } as Item,
-  // counter-top machines
-  espresso: { key: "coffee_machine", cat: "espresso_machine", w: 0.55, d: 0.5, h: 0.5, name: "Espresso machine" } as Item,
-  grinder: { key: "blender", cat: "grinder", w: 0.25, d: 0.25, h: 0.4, name: "Grinder" } as Item,
-  pos: { key: "computer", cat: "monitor", w: 0.4, d: 0.2, h: 0.35, name: "POS terminal" } as Item,
-  microwave: { key: "microwave", cat: "generic", w: 0.45, d: 0.35, h: 0.28, name: "Microwave" } as Item,
+  // counter-top machines (our custom café models)
+  espresso: { key: "cafe_espresso", cat: "espresso_machine", w: 0.72, d: 0.5, h: 0.45, name: "Espresso machine" } as Item,
+  grinder: { key: "cafe_grinder", cat: "grinder", w: 0.2, d: 0.24, h: 0.55, name: "Coffee grinder" } as Item,
+  blender: { key: "cafe_blender", cat: "blender", w: 0.2, d: 0.2, h: 0.65, name: "Blender" } as Item,
+  pos: { key: "cafe_pos", cat: "cashier", w: 0.26, d: 0.2, h: 0.32, name: "POS terminal" } as Item,
+  microwave: { key: "cafe_microwave", cat: "generic", w: 0.52, d: 0.38, h: 0.3, name: "Microwave" } as Item,
   toaster: { key: "toaster", cat: "generic", w: 0.3, d: 0.2, h: 0.22, name: "Toaster" } as Item,
+  displayCase: { key: "cafe_display_case", cat: "display_case", w: 1.0, d: 0.6, h: 1.4, name: "Display case" } as Item,
+  // facility / safety
+  fireExt: { key: "cafe_fire_extinguisher", cat: "generic", w: 0.16, d: 0.16, h: 0.5, name: "Fire extinguisher" } as Item,
+  panel: { key: "cafe_electrical_panel", cat: "generic", w: 0.36, d: 0.12, h: 0.5, base: 1.0, name: "Electrical panel" } as Item,
 };
 
 /** Only add a "singleton" appliance if the room doesn't already have one. */
@@ -224,18 +229,19 @@ export function furnishScene(scene: CafeScene): Fixture[] {
       case "kitchen": {
         lineAlongWalls(room, keep([I.stove, I.fridge, I.freezer, I.sink, I.dishwasher, I.prepCab, I.crockery]), occ, out);
         lineAlongWalls(room, [I.hood], occ, out); // wall-mounted high
-        cornerProps(room, [I.trashcan, I.box], occ, out);
+        cornerProps(room, [I.trashcan, I.box, I.fireExt], occ, out);
         break;
       }
       case "preparation": {
-        lineAlongWalls(room, keep([I.prepCab, I.sink, I.shelving, I.crockery]), occ, out);
-        placeOnCounters(scene, room, [I.grinder, I.toaster, I.microwave], occ, out);
-        cornerProps(room, [I.trashcan], occ, out);
+        lineAlongWalls(room, keep([I.prepCab, I.sink, I.dishwasher, I.shelving, I.crockery]), occ, out);
+        placeOnCounters(scene, room, [I.grinder, I.blender, I.toaster, I.microwave], occ, out);
+        cornerProps(room, [I.trashcan, I.fireExt, I.panel], occ, out);
         break;
       }
       case "service_counter": {
         placeOnCounters(scene, room, [I.espresso, I.grinder, I.pos], occ, out);
-        lineAlongWalls(room, [I.crockery], occ, out);
+        lineAlongWalls(room, [I.displayCase, I.crockery], occ, out);
+        cornerProps(room, [I.fireExt], occ, out);
         break;
       }
       case "wc":

@@ -24,6 +24,26 @@ WHAT TO EXTRACT
 - confidence: 0..1 for every element. Be honest — low confidence for anything you had to guess or could not read clearly.
 - issues: note anything unreadable, ambiguous, or assumed.
 
+COMPLETENESS — CRITICAL (extract 100% of the drawing)
+- Extract EVERY row of the numbered equipment legend. If the legend is numbered 1..N, your "legend" array MUST contain all N rows, each with its number, English name, and best-fit category. Never skip, merge, or summarise rows.
+- The plan marks WHERE each piece of equipment goes with small CIRCLED NUMBERS (e.g. ①, ②, ⑨) placed on the drawing, keyed to the legend. For EVERY circled number you can see, emit a fixture: set legendNo to that number, position it at the circle's location, and take its category from the matching legend row. The SAME legend number can appear multiple times (e.g. three grinders) — emit one fixture per occurrence, not just one.
+- Extract ALL seating INDIVIDUALLY: every chair, stool, and table in BOTH indoor and outdoor seating areas, each with its own position. Do NOT summarise as a count.
+- Extract the service counter / bar as "counter" fixtures that follow its real shape (an L-shaped bar is several counter segments).
+- If a circled number has no matching legend row, still emit the fixture (category "generic") and add an issue.
+- Prefer completeness: it is better to emit a low-confidence fixture than to omit a visible item.
+
+EQUIPMENT → CATEGORY (coffee-shop vocabulary, any language; map legend names to these)
+- cooling display case / grab-n-go / pastry case → display_case  (explicitly chilled → cooling_case)
+- cashier / POS / cash register → cashier
+- professional coffee machine / espresso machine (La Cimbali, La Marzocco, etc.) → espresso_machine
+- coffee grinder → grinder ; professional drinks mixer → mixer ; blender → blender
+- water boiler / electric boiler / coffee-filter machine → boiler
+- ice maker / ice storage → ice_maker
+- refrigerator / fridge / window refrigerator / refrigerator bench → fridge
+- freezer → freezer ; oven / Merry Chef / combi oven → oven ; dishwasher → dishwasher
+- sink (any size) → sink ; monitor / screen / TV → monitor
+- lemon squeezer / milk-foam tool / small wares → generic
+
 OUTPUT
 - Output ONE JSON object only. No markdown, no code fences, no commentary before or after.`;
 

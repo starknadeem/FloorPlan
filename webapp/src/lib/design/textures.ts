@@ -7,7 +7,7 @@ import * as THREE from "three";
 const cache = new Map<string, THREE.CanvasTexture>();
 
 // ---------- real image-based PBR materials (ambientCG, CC0) ----------
-export type PbrName = "terrazzo" | "concrete" | "marble" | "wood" | "fabric";
+export type PbrName = "terrazzo" | "concrete" | "marble" | "wood" | "fabric" | "oak" | "plaster";
 export interface PbrMaps {
   map: THREE.Texture;
   normalMap: THREE.Texture;

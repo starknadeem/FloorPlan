@@ -14,6 +14,37 @@ function shade(hex: string, f: number): string {
   return `#${c.getHexString()}`;
 }
 
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** One wall box skinned with tiled plaster PBR, tinted by the palette wall colour. */
+function WallBox({
+  b,
+  thickness,
+  color,
+}: {
+  b: { u: number; yCenter: number; length: number; height: number };
+  thickness: number;
+  color: string;
+}) {
+  // plaster texture is ~3 m; tile per box so the grain stays life-sized.
+  const rx = Math.max(0.3, r2(b.length / 3));
+  const ry = Math.max(0.3, r2(b.height / 3));
+  const m = pbr("plaster", rx, ry);
+  return (
+    <mesh position={[b.u, b.yCenter, 0]} castShadow receiveShadow>
+      <boxGeometry args={[b.length, b.height, thickness]} />
+      <meshStandardMaterial
+        map={m.map}
+        normalMap={m.normalMap}
+        roughnessMap={m.roughnessMap}
+        color={color}
+        roughness={1}
+        metalness={0}
+      />
+    </mesh>
+  );
+}
+
 function WallMesh({ wall, scene, pal }: { wall: Wall; scene: CafeScene; pal: StylePalette }) {
   const { boxes, glass } = useMemo(() => buildWallBoxes(wall, scene.openings), [wall, scene.openings]);
   const angle = wallAngleY(wall.a, wall.b);
@@ -24,10 +55,7 @@ function WallMesh({ wall, scene, pal }: { wall: Wall; scene: CafeScene; pal: Sty
   return (
     <group position={[wall.a[0], base, -wall.a[1]]} rotation={[0, angle, 0]}>
       {boxes.map((b, i) => (
-        <mesh key={`b${i}`} position={[b.u, b.yCenter, 0]} castShadow receiveShadow>
-          <boxGeometry args={[b.length, b.height, wall.thickness]} />
-          <meshStandardMaterial color={color} roughness={0.95} metalness={0} />
-        </mesh>
+        <WallBox key={`b${i}`} b={b} thickness={wall.thickness} color={color} />
       ))}
       {/* skirting / baseboard along the foot of each solid wall run */}
       {solids.map((b, i) => (
@@ -61,9 +89,19 @@ function RoomSurfaces({ room, pal }: { room: Room; pal: StylePalette }) {
         if (pointInPolygon(room.polygon, x, y)) pts.push([x, room.ceilingHeight - 0.02, -y]);
     return pts;
   }, [room.polygon, room.ceilingHeight]);
-  // Real CC0 PBR floor: polished concrete indoors, terrazzo tiles on the terrace.
-  // ShapeGeometry UVs are in plan metres, so repeat = tiles-per-metre.
-  const floor = outdoor ? pbr("terrazzo", 0.5, 0.5) : pbr("concrete", 0.4, 0.4);
+  // Real CC0 PBR floor: warm oak in guest areas, hard-wearing concrete in wet/back-of-house,
+  // terrazzo on the terrace. ShapeGeometry UVs are in plan metres → repeat = 1 / tileMetres.
+  const wet =
+    room.category === "wc" ||
+    room.category === "wc_disabled" ||
+    room.category === "kitchen" ||
+    room.category === "preparation" ||
+    room.category === "storage";
+  const floorName = outdoor ? "terrazzo" : wet ? "concrete" : "oak";
+  const tile = outdoor ? 2.0 : wet ? 2.5 : 1.6;
+  const rep = r2(1 / tile);
+  const floor = pbr(floorName, rep, rep);
+  const floorTint = outdoor ? "#ffffff" : wet ? "#d8d8d6" : "#ffffff";
 
   return (
     <group>
@@ -72,7 +110,7 @@ function RoomSurfaces({ room, pal }: { room: Room; pal: StylePalette }) {
           map={floor.map}
           normalMap={floor.normalMap}
           roughnessMap={floor.roughnessMap}
-          color={outdoor ? "#ffffff" : "#d8d8d6"}
+          color={floorTint}
           roughness={1}
           metalness={0}
           side={THREE.DoubleSide}
