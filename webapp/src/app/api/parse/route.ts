@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import sharp from "sharp";
 import { parsePlanImage } from "@/lib/parser/anthropic";
 import { parsedPlanToScene } from "@/lib/parser/normalize";
+import { elevateCounterTopItems } from "@/lib/design/furnish";
 
 export const maxDuration = 300;
 
@@ -38,7 +39,8 @@ export async function POST(req: Request) {
 
     const started = Date.now();
     const { plan, usage, model } = await parsePlanImage(base64, "image/jpeg");
-    const scene = parsedPlanToScene(plan, file.name || "upload");
+    // lift counter-top machines onto counters + clamp oversized appliance footprints
+    const scene = elevateCounterTopItems(parsedPlanToScene(plan, file.name || "upload"));
 
     // rough cost estimate for claude-opus-5-5 ($4 / $20 per MTok)
     const estCostUsd =

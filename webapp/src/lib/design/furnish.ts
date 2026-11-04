@@ -76,13 +76,17 @@ function mkProp(it: Item, roomId: string, pos: Vec2, rot: number, base = it.base
     footprint: [it.w, it.d],
     height: it.h,
     baseHeight: base,
-    modelKey: it.key,
+    modelKey: it.key || undefined,
     placedBy: "design",
     confidence: 0.6,
     source: { system: 2, method: "design" },
   };
 }
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Keep only items whose category the room doesn't already have (generic props always pass). */
+const onlyMissing = (its: Item[], have: Set<FixtureCategory>) =>
+  its.filter((it) => it.cat === "generic" || !have.has(it.cat));
 
 // ---- placement primitives ----
 function lineAlongWalls(room: Room, items: Item[], occ: Disc[], out: Fixture[]) {
@@ -114,29 +118,89 @@ function lineAlongWalls(room: Room, items: Item[], occ: Disc[], out: Fixture[]) 
   }
 }
 
-const CHAIR: Item = { key: "cafe_chair", cat: "chair", w: 0.5, d: 0.5, h: 0.9, name: "Chair" };
-function seatTables(scene: CafeScene, occ: Disc[], out: Fixture[]) {
-  const roomsByTable = (f: Fixture) => scene.rooms.find((r) => pointInPoly(r.polygon, f.position[0], f.position[1]));
+// ---- clean per-table seating ----
+/** Candidate seat positions + facings around one table, evenly spaced and tucked in. */
+function tableSeats(t: Fixture): { pos: Vec2; rot: number }[] {
+  const [w, d] = t.footprint;
+  const cx = t.position[0], cy = t.position[1];
+  const big = Math.max(w, d), small = Math.min(w, d);
+  const seatGap = 0.3; // chair seat pulled this far off the table edge
+  const out: { pos: Vec2; rot: number }[] = [];
+  const rectangular = big - small > 0.35;
+
+  if (!rectangular) {
+    // round / square: evenly spaced around the perimeter, facing the centre
+    const n = big <= 0.85 ? 2 : big <= 1.2 ? 4 : big <= 1.7 ? 6 : 8;
+    const r = big / 2 + seatGap;
+    for (let i = 0; i < n; i++) {
+      const a = Math.PI / 2 + (2 * Math.PI * i) / n; // start at the far side
+      const pos: Vec2 = [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+      out.push({ pos, rot: facingDeg([cx - pos[0], cy - pos[1]]) });
+    }
+    return out;
+  }
+
+  // rectangular: chairs along both long sides, spaced ~0.62 m; ends if long enough
+  const alongX = w >= d;
+  const L = alongX ? w : d, offLong = (alongX ? d : w) / 2 + seatGap;
+  const per = Math.max(1, Math.round((L - 0.1) / 0.62));
+  for (let s = -1; s <= 1; s += 2) {
+    for (let i = 0; i < per; i++) {
+      const f = per === 1 ? 0 : i / (per - 1) - 0.5;
+      const along = f * (L - 0.35);
+      const pos: Vec2 = alongX ? [cx + along, cy + s * offLong] : [cx + s * offLong, cy + along];
+      out.push({ pos, rot: facingDeg(alongX ? [0, -s] : [-s, 0]) });
+    }
+  }
+  if (L > 1.5) {
+    const offEnd = (alongX ? w : d) / 2 + seatGap;
+    for (let e = -1; e <= 1; e += 2) {
+      const pos: Vec2 = alongX ? [cx + e * offEnd, cy] : [cx, cy + e * offEnd];
+      out.push({ pos, rot: facingDeg(alongX ? [-e, 0] : [0, -e]) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Drop all parsed chairs (they arrive scattered/overlapping) and regenerate one tidy, tucked-in
+ * cluster per table. Bar stools and everything else are kept as-is. Returns a new scene.
+ */
+export function rearrangeSeating(scene: CafeScene): CafeScene {
+  const keep = scene.fixtures.filter((f) => f.category !== "chair");
+  const occ: Disc[] = keep.map((f) => discOf(f.position, f.footprint[0], f.footprint[1]));
+  const seats: Fixture[] = [];
+  let i = 0;
+  const roomOfTable = (t: Fixture): Room | undefined =>
+    scene.rooms.find((r) => r.id === t.roomId) ??
+    scene.rooms.find((r) => r.polygon.length >= 3 && pointInPoly(r.polygon, t.position[0], t.position[1]));
+
   for (const t of scene.fixtures) {
     if (t.category !== "table") continue;
-    const room = scene.rooms.find((r) => r.id === t.roomId) ?? roomsByTable(t);
-    // already has chairs nearby? skip
-    const tr = 0.5 * Math.max(t.footprint[0], t.footprint[1]);
-    const near = scene.fixtures.some(
-      (c) => (c.category === "chair" || c.category === "stool") && len(sub(c.position, t.position)) < tr + 0.7,
-    );
-    if (near) continue;
-    const off = tr + 0.34;
-    const dirs: Vec2[] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-    for (const dv of dirs) {
-      const pos: Vec2 = [t.position[0] + dv[0] * off, t.position[1] + dv[1] * off];
-      if (room && !pointInPoly(room.polygon, pos[0], pos[1])) continue;
-      const disc = discOf(pos, CHAIR.w, CHAIR.d);
-      if (hits(disc, occ)) continue;
-      out.push(mkProp(CHAIR, room?.id ?? t.roomId ?? "rm", pos, facingDeg([-dv[0], -dv[1]])));
+    const room = roomOfTable(t);
+    for (const s of tableSeats(t)) {
+      if (room && room.polygon.length >= 3 && !pointInPoly(room.polygon, s.pos[0], s.pos[1])) continue;
+      const disc = discOf(s.pos, 0.5, 0.5);
+      if (hits(disc, occ, 0.7)) continue;
+      seats.push({
+        id: `fx_seat_${i++}`,
+        name: "Chair",
+        category: "chair",
+        roomId: room?.id ?? t.roomId,
+        position: [round2(s.pos[0]), round2(s.pos[1])],
+        rotation: Math.round(s.rot),
+        footprint: [0.5, 0.5],
+        height: 0.9,
+        baseHeight: 0,
+        modelKey: "cafe_chair",
+        placedBy: "design",
+        confidence: 0.6,
+        source: { system: 2, method: "design" },
+      });
       occ.push(disc);
     }
   }
+  return { ...scene, fixtures: [...keep, ...seats] };
 }
 
 /** Place small machines on top of existing counters in a room (espresso machine, grinder, POS…). */
@@ -206,7 +270,200 @@ const I = {
   // facility / safety
   fireExt: { key: "cafe_fire_extinguisher", cat: "generic", w: 0.16, d: 0.16, h: 0.5, name: "Fire extinguisher" } as Item,
   panel: { key: "cafe_electrical_panel", cat: "generic", w: 0.36, d: 0.12, h: 0.5, base: 1.0, name: "Electrical panel" } as Item,
+  // wall decor + lighting (parametric unless a key is given)
+  pendant: { key: "", cat: "pendant_light", w: 0.32, d: 0.32, h: 0.45, name: "Pendant light" } as Item,
+  wallArt: { key: "", cat: "menu_board", w: 0.6, d: 0.05, h: 0.55, base: 1.45, name: "Framed art" } as Item,
+  menuBoard: { key: "", cat: "menu_board", w: 1.3, d: 0.05, h: 0.6, base: 1.75, name: "Menu board" } as Item,
+  sconce: { key: "wall_lamp", cat: "generic", w: 0.18, d: 0.12, h: 0.28, base: 1.95, name: "Wall lamp" } as Item,
+  sign: { key: "cafe_signage", cat: "signage", w: 0.9, d: 0.06, h: 0.3, base: 2.0, name: "Café sign" } as Item,
+  wallShelf: { key: "cafe_shelving", cat: "shelving", w: 0.9, d: 0.28, h: 0.7, base: 1.1, name: "Wall shelf" } as Item,
 };
+
+// ---- wall decor + lighting (fills bare walls, lights the tables) ----
+const roomOfPos = (scene: CafeScene, p: Vec2): Room | undefined =>
+  scene.rooms.find((r) => r.polygon.length >= 3 && pointInPoly(r.polygon, p[0], p[1]));
+
+function pendantsOverTables(scene: CafeScene, out: Fixture[]) {
+  for (const t of scene.fixtures) {
+    if (t.category !== "table") continue;
+    const room = scene.rooms.find((r) => r.id === t.roomId) ?? roomOfPos(scene, t.position);
+    if (!room || room.category === "seating_outdoor") continue; // outdoors uses umbrellas
+    const ch = room.ceilingHeight > 0 ? room.ceilingHeight : 3.0;
+    out.push(mkProp(I.pendant, room.id, t.position, 0, ch - 0.55));
+  }
+}
+
+function menuOverCounters(scene: CafeScene, out: Fixture[]) {
+  for (const room of scene.rooms) {
+    if (room.category !== "service_counter") continue;
+    const counters = scene.fixtures.filter(
+      (f) => f.category === "counter" && (f.roomId === room.id || pointInPoly(room.polygon, f.position[0], f.position[1])),
+    );
+    if (!counters.length) continue;
+    const c = counters.sort((a, b) => b.footprint[0] - a.footprint[0])[0];
+    out.push(mkProp(I.menuBoard, room.id, c.position, c.rotation, I.menuBoard.base ?? 1.75));
+  }
+}
+
+/** Spread framed art + wall sconces along the longest walls of a guest room. */
+function decorateWalls(room: Room, out: Fixture[]) {
+  const edges = roomEdges(room).slice(0, 2); // the two longest walls only
+  for (const e of edges) {
+    if (e.len < 1.8) continue;
+    for (let s = 1.4; s <= e.len - 1.2; s += 3.0) {
+      const pos = add(add(e.a, mul(e.dir, s)), mul(e.n, 0.07));
+      if (pointInPoly(room.polygon, pos[0], pos[1])) out.push(mkProp(I.wallArt, room.id, pos, facingDeg(e.n), I.wallArt.base ?? 1.45));
+    }
+    for (let s = 2.9; s <= e.len - 1.2; s += 4.2) {
+      const pos = add(add(e.a, mul(e.dir, s)), mul(e.n, 0.05));
+      if (pointInPoly(room.polygon, pos[0], pos[1])) out.push(mkProp(I.sconce, room.id, pos, facingDeg(e.n), I.sconce.base ?? 1.95));
+    }
+  }
+}
+
+function featureSign(scene: CafeScene, out: Fixture[]) {
+  const room = scene.rooms.find((r) => r.category === "seating_indoor") ?? scene.rooms.find((r) => r.category === "service_counter");
+  if (!room) return;
+  const e = roomEdges(room)[0];
+  if (!e || e.len < 1.2) return;
+  const pos = add(add(e.a, mul(e.dir, e.len / 2)), mul(e.n, 0.08));
+  if (pointInPoly(room.polygon, pos[0], pos[1])) out.push(mkProp(I.sign, room.id, pos, facingDeg(e.n), I.sign.base ?? 2.0));
+}
+
+/**
+ * Counter-top appliances: max footprint (so the model doesn't scale up huge) + the fact that they
+ * belong ON a counter. Floor-standing units (fridge, oven, display case…) are deliberately excluded.
+ */
+const COUNTERTOP = new Map<FixtureCategory, [number, number]>([
+  ["espresso_machine", [0.78, 0.56]],
+  ["grinder", [0.24, 0.26]],
+  ["blender", [0.22, 0.22]],
+  ["mixer", [0.3, 0.3]],
+  ["boiler", [0.42, 0.36]],
+  ["cashier", [0.34, 0.3]],
+]);
+
+const MIN_TABLE = 0.65; // a 2-top is ~0.7 m; parsed symbols often come in at 0.4-0.5 and render tiny
+
+/** Point → segment: distance, normalised parameter t, and the closest point. */
+function segProj(p: Vec2, a: Vec2, b: Vec2): { d: number; t: number; pt: Vec2 } {
+  const abx = b[0] - a[0], aby = b[1] - a[1];
+  const l2 = abx * abx + aby * aby || 1e-9;
+  let t = ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / l2;
+  t = Math.max(0, Math.min(1, t));
+  const pt: Vec2 = [a[0] + abx * t, a[1] + aby * t];
+  return { d: Math.hypot(p[0] - pt[0], p[1] - pt[1]), t, pt };
+}
+
+interface CounterSeg { h: number; a: Vec2; b: Vec2 }
+/** A counter as a line segment along its length (footprint[0] runs along its rotation axis). */
+function counterSeg(c: Fixture): CounterSeg {
+  const r = ((c.rotation ?? 0) * Math.PI) / 180;
+  const ax: Vec2 = [Math.cos(r), Math.sin(r)];
+  const half = c.footprint[0] / 2;
+  return {
+    h: c.height ?? 0.9,
+    a: [c.position[0] - ax[0] * half, c.position[1] - ax[1] * half],
+    b: [c.position[0] + ax[0] * half, c.position[1] + ax[1] * half],
+  };
+}
+
+/**
+ * Normalise counter-top equipment and tables:
+ *  1. clamp oversized appliance footprints (the model scales to the footprint → "giant grinder");
+ *  2. where wall-lined equipment has NO counter beneath it, synthesise a back-counter run along that
+ *     wall spanning the items (the L-shaped worktop the drawing implies but the parser missed);
+ *  3. snap every counter-top item ONTO its counter (project onto the counter's centre line) and lift
+ *     it to the worktop height — and never lift an item that has nothing underneath it (no floating);
+ *  4. enforce a minimum table size.
+ */
+export function elevateCounterTopItems(scene: CafeScene): CafeScene {
+  let fixtures: Fixture[] = scene.fixtures.map((f) => {
+    const cap = COUNTERTOP.get(f.category);
+    if (cap) return { ...f, footprint: [Math.min(f.footprint[0], cap[0]), Math.min(f.footprint[1], cap[1])] as Vec2 };
+    if (f.category === "table") {
+      return { ...f, footprint: [Math.max(f.footprint[0], MIN_TABLE), Math.max(f.footprint[1], MIN_TABLE)] as Vec2 };
+    }
+    return f;
+  });
+
+  const nearestCounter = (p: Vec2, segs: CounterSeg[], within: number) => {
+    let best: ({ s: CounterSeg } & ReturnType<typeof segProj>) | null = null;
+    for (const s of segs) {
+      const r = segProj(p, s.a, s.b);
+      if (r.d < within && (!best || r.d < best.d)) best = { ...r, s };
+    }
+    return best;
+  };
+
+  // --- 2) synthesise back-counter runs for wall-lined appliances with nothing beneath ---------
+  let segs = fixtures.filter((f) => f.category === "counter").map(counterSeg);
+  const orphans = fixtures.filter((f) => COUNTERTOP.has(f.category) && !nearestCounter(f.position, segs, 0.5));
+  const byWall = new Map<number, { f: Fixture; t: number; n: Vec2 }[]>();
+  for (const f of orphans) {
+    let best: ({ i: number } & ReturnType<typeof segProj>) | null = null;
+    for (let i = 0; i < scene.walls.length; i++) {
+      const r = segProj(f.position, scene.walls[i].a, scene.walls[i].b);
+      if (r.d < 0.9 && (best === null || r.d < best.d)) best = { ...r, i };
+    }
+    if (best === null) continue;
+    const n = norm(sub(f.position, best.pt)); // inward: from the wall toward the item
+    if (!byWall.has(best.i)) byWall.set(best.i, []);
+    byWall.get(best.i)!.push({ f, t: best.t, n });
+  }
+  const synth: Fixture[] = [];
+  let k = 0;
+  for (const [wi, items] of byWall) {
+    const w = scene.walls[wi];
+    const L = len(sub(w.b, w.a));
+    const dir = norm(sub(w.b, w.a));
+    items.sort((x, y) => x.t - y.t);
+    let run: typeof items = [];
+    const flush = () => {
+      if (!run.length) return;
+      const t0 = Math.max(0, run[0].t * L - 0.35);
+      const t1 = Math.min(L, run[run.length - 1].t * L + 0.35);
+      const span = Math.max(1.0, t1 - t0);
+      const n = run[0].n;
+      const depth = 0.6;
+      const mid = add(w.a, mul(dir, (t0 + t1) / 2));
+      const center = add(mid, mul(n, (w.thickness ?? 0.15) / 2 + depth / 2));
+      const axis: Vec2 = [n[1], -n[0]]; // long axis whose left-perpendicular is the inward normal
+      synth.push({
+        id: `fx_backcounter_${k++}`,
+        name: "Back counter (auto)",
+        category: "counter",
+        roomId: run[0].f.roomId,
+        position: [round2(center[0]), round2(center[1])],
+        rotation: Math.round((Math.atan2(axis[1], axis[0]) * 180) / Math.PI),
+        footprint: [round2(span), depth],
+        height: 0.9,
+        baseHeight: 0,
+        modelKey: "cafe_counter",
+        placedBy: "design",
+        confidence: 0.5,
+        source: { system: 2, method: "design" },
+      });
+      run = [];
+    };
+    for (const it of items) {
+      if (run.length && (it.t - run[run.length - 1].t) * L > 1.5) flush();
+      run.push(it);
+    }
+    flush();
+  }
+  fixtures = [...fixtures, ...synth];
+
+  // --- 3) snap + lift onto a counter that is actually underneath; otherwise stay on the floor ---
+  segs = fixtures.filter((f) => f.category === "counter").map(counterSeg);
+  fixtures = fixtures.map((f) => {
+    if (!COUNTERTOP.has(f.category)) return f;
+    const hit = nearestCounter(f.position, segs, 0.75);
+    if (!hit) return { ...f, baseHeight: 0 };
+    return { ...f, position: [round2(hit.pt[0]), round2(hit.pt[1])] as Vec2, baseHeight: hit.s.h };
+  });
+  return { ...scene, fixtures };
+}
 
 /** Only add a "singleton" appliance if the room doesn't already have one. */
 const SINGLETON = new Set<FixtureCategory>(["fridge", "freezer", "oven", "sink", "dishwasher", "toilet", "espresso_machine"]);
@@ -215,11 +472,11 @@ export function furnishScene(scene: CafeScene): Fixture[] {
   _seq = 0;
   const out: Fixture[] = [];
   const occ: Disc[] = scene.fixtures.map((f) => discOf(f.position, f.footprint[0], f.footprint[1]));
+  // scene-wide categories already present (so we never duplicate parsed counter machines that sit
+  // on a room boundary and get missed by the per-room check)
+  const sceneHas = new Set<FixtureCategory>(scene.fixtures.map((f) => f.category));
 
-  // 1) seat every table (chairs are almost never in the parse)
-  seatTables(scene, occ, out);
-
-  // 2) per-room equipment
+  // per-room equipment (seating is handled separately by rearrangeSeating, before this runs)
   for (const room of scene.rooms) {
     if (room.polygon.length < 3) continue;
     const have = new Set(roomFixtures(scene, room).map((f) => f.category));
@@ -234,13 +491,13 @@ export function furnishScene(scene: CafeScene): Fixture[] {
       }
       case "preparation": {
         lineAlongWalls(room, keep([I.prepCab, I.sink, I.dishwasher, I.shelving, I.crockery]), occ, out);
-        placeOnCounters(scene, room, [I.grinder, I.blender, I.toaster, I.microwave], occ, out);
+        placeOnCounters(scene, room, onlyMissing([I.grinder, I.blender, I.toaster, I.microwave], sceneHas), occ, out);
         cornerProps(room, [I.trashcan, I.fireExt, I.panel], occ, out);
         break;
       }
       case "service_counter": {
-        placeOnCounters(scene, room, [I.espresso, I.grinder, I.pos], occ, out);
-        lineAlongWalls(room, [I.displayCase, I.crockery], occ, out);
+        placeOnCounters(scene, room, onlyMissing([I.espresso, I.grinder, I.pos], sceneHas), occ, out);
+        lineAlongWalls(room, onlyMissing([I.displayCase], sceneHas).concat([I.crockery]), occ, out);
         cornerProps(room, [I.fireExt], occ, out);
         break;
       }
@@ -272,5 +529,16 @@ export function furnishScene(scene: CafeScene): Fixture[] {
         break;
     }
   }
+
+  // decor + lighting so walls/ceiling don't read empty
+  pendantsOverTables(scene, out);
+  menuOverCounters(scene, out);
+  for (const room of scene.rooms) {
+    // guest-facing rooms only; service-counter walls are already lined with equipment.
+    if (room.category === "seating_indoor" || room.category === "entrance") {
+      decorateWalls(room, out);
+    }
+  }
+  featureSign(scene, out);
   return out;
 }

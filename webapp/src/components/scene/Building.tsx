@@ -45,6 +45,39 @@ function WallBox({
   );
 }
 
+/** A window: glass pane + dark frame + vertical mullions, so a glazed storefront still reads as a wall. */
+function GlazedOpening({
+  g,
+  thickness,
+  pal,
+}: {
+  g: { u: number; yCenter: number; width: number; height: number };
+  thickness: number;
+  pal: StylePalette;
+}) {
+  const bar = 0.06;
+  const depth = thickness + 0.02;
+  const frame = "#2b2b2b";
+  const mullions: number[] = [];
+  for (let x = 1.0; x < g.width - 0.3; x += 1.0) mullions.push(-g.width / 2 + x);
+  return (
+    <group position={[g.u, g.yCenter, 0]}>
+      <mesh>
+        <boxGeometry args={[g.width, g.height, 0.02]} />
+        <meshStandardMaterial color={pal.glass} transparent opacity={0.28} roughness={0.08} metalness={0.1} />
+      </mesh>
+      {/* frame: top, bottom, left, right */}
+      <mesh position={[0, g.height / 2 - bar / 2, 0]}><boxGeometry args={[g.width, bar, depth]} /><meshStandardMaterial color={frame} roughness={0.6} /></mesh>
+      <mesh position={[0, -g.height / 2 + bar / 2, 0]}><boxGeometry args={[g.width, bar, depth]} /><meshStandardMaterial color={frame} roughness={0.6} /></mesh>
+      <mesh position={[-g.width / 2 + bar / 2, 0, 0]}><boxGeometry args={[bar, g.height, depth]} /><meshStandardMaterial color={frame} roughness={0.6} /></mesh>
+      <mesh position={[g.width / 2 - bar / 2, 0, 0]}><boxGeometry args={[bar, g.height, depth]} /><meshStandardMaterial color={frame} roughness={0.6} /></mesh>
+      {mullions.map((x, i) => (
+        <mesh key={i} position={[x, 0, 0]}><boxGeometry args={[bar * 0.7, g.height, depth]} /><meshStandardMaterial color={frame} roughness={0.6} /></mesh>
+      ))}
+    </group>
+  );
+}
+
 function WallMesh({ wall, scene, pal }: { wall: Wall; scene: CafeScene; pal: StylePalette }) {
   const { boxes, glass } = useMemo(() => buildWallBoxes(wall, scene.openings), [wall, scene.openings]);
   const angle = wallAngleY(wall.a, wall.b);
@@ -65,10 +98,7 @@ function WallMesh({ wall, scene, pal }: { wall: Wall; scene: CafeScene; pal: Sty
         </mesh>
       ))}
       {glass.map((g, i) => (
-        <mesh key={`g${i}`} position={[g.u, g.yCenter, 0]}>
-          <boxGeometry args={[g.width, g.height, 0.03]} />
-          <meshStandardMaterial color={pal.glass} transparent opacity={0.25} roughness={0.1} metalness={0.1} />
-        </mesh>
+        <GlazedOpening key={`g${i}`} g={g} thickness={wall.thickness} pal={pal} />
       ))}
     </group>
   );

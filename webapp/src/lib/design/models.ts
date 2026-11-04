@@ -18,8 +18,10 @@ export interface ModelDef {
    *  front faces plan +Y at rotation 0, per CAFESCENE_SCHEMA §1.1. */
   baseRotationDeg?: number;
   /** "contain" = scale uniformly to fit inside the footprint (no distortion, no wall
-   *  poke-through). "width" = scale uniformly so model width matches footprint width. */
-  fit?: "width" | "contain";
+   *  poke-through). "width" = scale uniformly so model width matches footprint width.
+   *  "stretch" = non-uniform: width AND depth match the footprint exactly (for boxy, long
+   *  pieces like counters, where a 5 m bar must really be 5 m long). */
+  fit?: "width" | "contain" | "stretch";
 }
 
 const M = "/models/kenney";
@@ -94,7 +96,7 @@ export const MODEL_CATALOG: Record<string, ModelDef> = {
   // Directional pieces face +Z after glTF export → use F (180°); radially-symmetric → 0.
   cafe_chair: { url: `${C}/chair.glb`, baseRotationDeg: F, fit: "contain" },
   cafe_table: { url: `${C}/table.glb`, baseRotationDeg: 0, fit: "contain" },
-  cafe_counter: { url: `${C}/counter.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_counter: { url: `${C}/counter.glb`, baseRotationDeg: F, fit: "stretch" },
   cafe_cart: { url: `${C}/coffeeCart.glb`, baseRotationDeg: F, fit: "contain" },
   cafe_sink: { url: `${C}/sink.glb`, baseRotationDeg: F, fit: "contain" },
   cafe_handwash_sink: { url: `${C}/handWashSink.glb`, baseRotationDeg: F, fit: "contain" },
@@ -160,7 +162,7 @@ export const VARIANTS_BY_CATEGORY: Partial<Record<FixtureCategory, string[]>> = 
   stool: ["stool_bar"],
   sofa: ["sofa", "sofa_long"],
   banquette: ["bench_cushion", "sofa_long"],
-  table: ["cafe_table", "table_round", "table_rect"],
+  table: ["cafe_table", "table_rect"],
   counter: ["cafe_counter"],
   cashier: ["cafe_pos"],
   fridge: ["cafe_fridge", "fridge", "fridge_large"],

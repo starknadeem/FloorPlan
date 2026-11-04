@@ -92,11 +92,14 @@ export default function ModelFixture({
     const targetD = Math.max(footprint[1], 0.1);
     const sW = dim.size.x > 1e-3 ? targetW / dim.size.x : 1;
     const sD = dim.size.z > 1e-3 ? targetD / dim.size.z : 1;
-    const scale = def.fit === "contain" ? Math.min(sW, sD) : sW;
-
     const g = new THREE.Group();
     g.add(clone);
-    g.scale.setScalar(scale);
+    if (def.fit === "stretch") {
+      // boxy, long pieces (counters): match width and depth exactly, keep height near native
+      g.scale.set(sW, Math.min(sW, sD), sD);
+    } else {
+      g.scale.setScalar(def.fit === "contain" ? Math.min(sW, sD) : sW);
+    }
     g.rotation.y = THREE.MathUtils.degToRad(def.baseRotationDeg ?? 0);
     return g;
   }, [scene, footprint, def, category]);

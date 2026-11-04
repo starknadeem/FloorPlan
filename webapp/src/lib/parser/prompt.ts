@@ -29,6 +29,8 @@ COMPLETENESS — CRITICAL (extract 100% of the drawing)
 - The plan marks WHERE each piece of equipment goes with small CIRCLED NUMBERS (e.g. ①, ②, ⑨) placed on the drawing, keyed to the legend. For EVERY circled number you can see, emit a fixture: set legendNo to that number, position it at the circle's location, and take its category from the matching legend row. The SAME legend number can appear multiple times (e.g. three grinders) — emit one fixture per occurrence, not just one.
 - Extract ALL seating INDIVIDUALLY: every chair, stool, and table in BOTH indoor and outdoor seating areas, each with its own position. Do NOT summarise as a count.
 - Extract the service counter / bar as "counter" fixtures that follow its real shape (an L-shaped bar is several counter segments).
+- BACK-BAR WORKTOPS: the long worktop / shelf running along the wall behind the bar, on which the grinders, boilers, coffee machine and sinks stand, is ALSO a "counter". Emit its FULL run (every stretch that carries equipment, as connected segments, depth ~0.6 m, height ~0.9 m). Equipment standing on it must be positioned ON that run.
+- CLOSED ENVELOPE: emit EVERY exterior wall segment so the building outline is closed. A glazed storefront / shopfront facade is a WALL with window openings (sillHeight ~0.3-0.9) — never omit the wall because it is glass. Also emit the interior partitions between rooms (seating ↔ prep room, prep room ↔ WC, etc.).
 - If a circled number has no matching legend row, still emit the fixture (category "generic") and add an issue.
 - Prefer completeness: it is better to emit a low-confidence fixture than to omit a visible item.
 

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { CafeScene } from "@/types/cafescene";
 import { planLayout } from "@/lib/design/anthropic";
 import { applyLayout, buildLayoutContext, deterministicResult, type LayoutResult } from "@/lib/design/layout";
-import { furnishScene } from "@/lib/design/furnish";
+import { furnishScene, rearrangeSeating, elevateCounterTopItems } from "@/lib/design/furnish";
 
 export const maxDuration = 120;
 
@@ -37,11 +37,19 @@ export async function POST(req: Request) {
       note = "No AI key — used geometry facing and placed WC fixtures.";
     }
 
-    // Orient the parsed fixtures, then furnish each room with the equipment it's missing.
+    // Orient the parsed fixtures, re-seat tables cleanly, then furnish + decorate each room.
     const oriented = applyLayout(scene, result);
-    const furnished = furnishScene(oriented);
-    const next = { ...oriented, fixtures: [...oriented.fixtures, ...furnished] };
-    return NextResponse.json({ scene: next, usedAI, note: `${note} Furnished rooms (+${furnished.length}).`, added: furnished.length });
+    const arranged = rearrangeSeating(oriented);
+    const furnished = furnishScene(arranged);
+    // lift counter-top machines onto counters + clamp oversized appliance footprints
+    const next = elevateCounterTopItems({ ...arranged, fixtures: [...arranged.fixtures, ...furnished] });
+    const seats = arranged.fixtures.filter((f) => f.category === "chair").length;
+    return NextResponse.json({
+      scene: next,
+      usedAI,
+      note: `${note} Re-seated tables (${seats} chairs), furnished + decorated rooms (+${furnished.length}).`,
+      added: furnished.length,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
