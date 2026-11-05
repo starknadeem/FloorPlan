@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { CafeScene } from "@/types/cafescene";
+import { DIRECTIONS } from "@/lib/design-blender/directions";
 
 export interface ImageIn {
   data: string; // base64 (no prefix)
@@ -54,8 +55,7 @@ export async function fileToImageIn(file: File): Promise<ImageIn | null> {
   return { data: btoa(bin), mediaType: mt, name: file.name };
 }
 
-const DEFAULT_BRIEF =
-  "Flagship specialty coffee concept. Warm contemporary palette: walnut and oak joinery, honed terrazzo counters, cream lime plaster, brushed brass details, black steel shelving, bouclé upholstery. Back bar shelving full of branded cups, pastry displays, self-order kiosks, retail wall with beans and brewing gear, menu screens, pendant lighting at 2700–3000K. Branded umbrellas and olive trees on the terrace.";
+const DEFAULT_BRIEF = ""; // empty on purpose: a pre-filled style made every design look the same
 
 export default function DesignTourPanel({
   scene,
@@ -71,6 +71,7 @@ export default function DesignTourPanel({
   onBlenderResult: (r: BlenderResult) => void;
 }) {
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
+  const [direction, setDirection] = useState(""); // "" = surprise me: the server picks a direction not used recently
   const [output, setOutput] = useState<OutputKind>("blender");
   const [renderMode, setRenderMode] = useState<"glb" | "stills" | "both">("glb");
   const [percent, setPercent] = useState<number | undefined>(undefined);
@@ -165,6 +166,7 @@ export default function DesignTourPanel({
           planImages: plans,
           references: [...refs, ...concepts.map(({ data, mediaType, name }) => ({ data, mediaType, name }))],
           mode: output === "blender-live" ? "live" : renderMode,
+          direction: direction || undefined,
           samples: 64,
         }),
       });
@@ -363,8 +365,12 @@ export default function DesignTourPanel({
             </section>
 
             <section style={S.card}>
-              <div style={S.label}>4 · Brief</div>
-              <textarea style={S.textarea} rows={4} value={brief} onChange={(e) => setBrief(e.target.value)} />
+              <div style={S.label}>4 · Design style</div>
+              <select style={{ ...S.textarea, height: "auto", marginBottom: 8 }} value={direction} onChange={(e) => setDirection(e.target.value)}>
+                <option value="">✨ Surprise me: a different design every run</option>
+                {DIRECTIONS.map((d) => <option key={d.id} value={d.id}>{d.name}: {d.summary}</option>)}
+              </select>
+              <textarea style={S.textarea} rows={3} placeholder="Optional brief: colours, brand, anything you want (overrides the style)" value={brief} onChange={(e) => setBrief(e.target.value)} />
             </section>
 
             {error && <div style={S.error}>{error}</div>}

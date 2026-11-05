@@ -31,6 +31,8 @@ def parse(argv):
         elif k == "--mode": a["mode"] = v; i += 2
         elif k == "--samples": a["samples"] = int(v); i += 2
         elif k == "--textures": a["textures"] = v; i += 2
+        elif k == "--seed": a["seed"] = int(v); i += 2
+        elif k == "--style": a["style"] = v; i += 2
         elif k in ("--res", "--pano-res"):
             w, h = v.lower().split("x"); a["res" if k == "--res" else "pano_res"] = (int(w), int(h)); i += 2
         else:
@@ -46,7 +48,7 @@ def main():
         scene = json.load(fh)
     with open(a["design"]) as fh:
         code = fh.read()
-    ns = {"bpy": bpy, "SCENE": scene, "TEXTURES": os.path.abspath(a["textures"]), "Kit": cafe_kit.Kit, "cafe_kit": cafe_kit, "math": __import__("math")}
+    ns = {"bpy": bpy, "SCENE": scene, "TEXTURES": os.path.abspath(a["textures"]), "Kit": cafe_kit.Kit, "cafe_kit": cafe_kit, "math": __import__("math"), "SEED": a.get("seed"), "STYLE": a.get("style")}
     exec(compile(code, a["design"], "exec"), ns)
     K = ns.get("K")
     if K is None:
@@ -54,12 +56,6 @@ def main():
     out = a["out"]
     os.makedirs(out, exist_ok=True)
     result = {"stills": [], "panos": None, "glb": None}
-    try:
-        K.export_glb(os.path.join(out, "cafe.glb"))
-        result["glb"] = "cafe.glb"
-        print("GLB_OK", flush=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"[warn] GLB export failed: {e}", flush=True)
     if a["mode"] in ("stills", "both"):
         result["stills"] = K.render_stills(out, samples=a["samples"], res=a["res"])
     if a["mode"] in ("panos", "both"):
@@ -69,6 +65,13 @@ def main():
         K.save(os.path.join(out, "cafe.blend"))
     except Exception as e:  # noqa: BLE001
         print(f"[warn] could not save .blend: {e}")
+    # after renders and the .blend: the export shrinks textures to web weight
+    try:
+        K.export_glb(os.path.join(out, "cafe.glb"))
+        result["glb"] = "cafe.glb"
+        print("GLB_OK", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] GLB export failed: {e}", flush=True)
     with open(os.path.join(out, "result.json"), "w") as fh:
         json.dump(result, fh, indent=2)
     print("RUN_OK", flush=True)

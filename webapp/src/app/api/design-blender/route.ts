@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import net from "node:net";
 import type { CafeScene } from "@/types/cafescene";
 import { DESIGN_BLENDER_SYSTEM, buildBlenderUserText, loadKitAndExemplar } from "@/lib/design-blender/prompt";
+import { LAYOUTS, directionById, pickDirection } from "@/lib/design-blender/directions";
 
 export const maxDuration = 300;
 
@@ -32,6 +33,7 @@ interface ImageIn {
   name?: string;
 }
 interface Body {
+  direction?: string;
   scene?: CafeScene;
   planImages?: ImageIn[];
   references?: ImageIn[];
@@ -54,6 +56,9 @@ interface Meta {
   glbUrl?: string;
   sceneUrl?: string;
   complete: boolean;
+  direction?: string;
+  directionName?: string;
+  seed?: number;
 }
 
 const isMedia = (m: unknown): m is MediaType => m === "image/jpeg" || m === "image/png" || m === "image/webp" || m === "image/gif";
@@ -65,6 +70,25 @@ function extractPython(text: string): string {
   const i = t.search(/^\s*(K\s*=\s*Kit\(|#|from |import )/m);
   if (i > 0) t = t.slice(i);
   return t.trim() + "\n";
+}
+
+/** Direction ids of past designs, newest first. */
+async function recentDirections(): Promise<string[]> {
+  try {
+    const ids = (await readdir(designsDir())).sort().reverse();
+    const out: string[] = [];
+    for (const id of ids.slice(0, 15)) {
+      try {
+        const m = JSON.parse(await readFile(path.join(designsDir(), id, "meta.json"), "utf8")) as Meta;
+        if (m.direction) out.push(m.direction);
+      } catch {
+        /* folder without meta */
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 function designsDir() {
@@ -140,11 +164,17 @@ export async function POST(req: Request) {
   const designUrl = `/blender-designs/${id}/design.py`;
   const cwd = process.cwd();
 
+  // every run: a fresh seed and a design direction that differs from the recent ones, so the same plan never repeats
+  const recent = await recentDirections();
+  const direction = directionById(body.direction) ?? pickDirection(recent);
+  const layout = LAYOUTS[Math.floor(Math.random() * LAYOUTS.length)];
+  const seed = Math.floor(Math.random() * 2 ** 31);
+
   const { kit, exemplar } = await loadKitAndExemplar();
   const system: Anthropic.Beta.BetaTextBlockParam[] = [
     { type: "text", text: DESIGN_BLENDER_SYSTEM },
     { type: "text", text: `=== cafe_kit.py (the API you build with) ===\n${kit}` },
-    { type: "text", text: `=== EXEMPLAR design.py (a finished design for a different plan; match its structure and care, not its coordinates) ===\n${exemplar}`, cache_control: { type: "ephemeral" } },
+    { type: "text", text: `=== EXEMPLAR design.py (API usage and level of care ONLY, for a different plan. Never reuse its concept, palette, materials or layout) ===\n${exemplar}`, cache_control: { type: "ephemeral" } },
   ];
   const content: Anthropic.Beta.BetaContentBlockParam[] = [];
   planImages.forEach((img, i) => {
@@ -155,7 +185,7 @@ export async function POST(req: Request) {
     content.push({ type: "text", text: `Interior reference ${i + 1}:` });
     content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
   });
-  content.push({ type: "text", text: buildBlenderUserText({ projectName, brief, scene, hasPlanImages: planImages.length > 0, refCount: references.length }) });
+  content.push({ type: "text", text: buildBlenderUserText({ projectName, brief, scene, hasPlanImages: planImages.length > 0, refCount: references.length, direction, layout }) });
 
   const client = new Anthropic({ timeout: 20 * 60 * 1000, maxRetries: 1 });
   const t0 = Date.now();
@@ -216,7 +246,7 @@ export async function POST(req: Request) {
         await mkdir(outDir, { recursive: true });
         await writeFile(path.join(outDir, "design.py"), code, "utf8");
         await writeFile(path.join(outDir, "scene.json"), JSON.stringify(scene), "utf8");
-        const meta: Meta = { id, projectName, brief, createdAt: new Date().toISOString(), model: final.model, mode, designUrl, stills: [], complete: false };
+        const meta: Meta = { id, projectName, brief, createdAt: new Date().toISOString(), model: final.model, mode, designUrl, stills: [], complete: false, direction: direction.id, directionName: direction.name, seed };
         await writeFile(path.join(outDir, "meta.json"), JSON.stringify(meta, null, 2), "utf8");
         if (final.stop_reason === "max_tokens") {
           send({ type: "error", error: "The design script was cut off (max_tokens). Raise DESIGN_BLENDER_MAX_TOKENS.", designUrl });
@@ -239,7 +269,7 @@ export async function POST(req: Request) {
             `import cafe_kit\nimportlib.reload(cafe_kit)\n` +
             `SCENE = json.load(open(${JSON.stringify(path.join(outDir, "scene.json"))}))\n` +
             `TEXTURES = ${JSON.stringify(path.join(cwd, "public", "textures"))}\n` +
-            `Kit = cafe_kit.Kit\nimport math\n` +
+            `Kit = cafe_kit.Kit\nimport math\nSEED = ${seed}\nSTYLE = ${JSON.stringify(direction.style)}\n` +
             `exec(compile(open(${JSON.stringify(path.join(outDir, "design.py"))}).read(), "design.py", "exec"))\n`;
           progress("build", "Building the café in your open Blender…", 40);
           const out = await runLive(live);
@@ -255,6 +285,7 @@ export async function POST(req: Request) {
           "--scene", path.join(outDir, "scene.json"), "--design", path.join(outDir, "design.py"),
           "--out", outDir, "--mode", mode, "--samples", String(samples), "--res", `${res[0]}x${res[1]}`,
           "--textures", path.join(cwd, "public", "textures"),
+          "--seed", String(seed), "--style", direction.style,
         ];
         const child = spawn(BLENDER_BIN, args, { cwd });
         let log = "";

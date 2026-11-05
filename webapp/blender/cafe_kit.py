@@ -23,7 +23,8 @@ Typical design.py:
     K.back_bar((0.0, 14.2), (0.0, 21.2), depth=0.55, shelves=3, cups=True)
     K.espresso_station((1.0, 17.0), rot=90)
     ...
-    K.lights()                                 # sun + interior lamps + fills
+    K.plan_equipment()                         # every fridge, oven, sink... from the plan, as detailed models
+    K.lights(mood="day")                       # sky, sun through the glazing, fills
     K.camera((5.0, 12.0), look_at=(3.0, 18.0)) # eye-level camera for the hero still
     K.finish()                                 # EEVEE preview settings, selection cleanup
 """
@@ -33,10 +34,45 @@ import json
 import math
 import os
 import random
+import sys
 
 import bpy  # type: ignore
 import bmesh  # type: ignore
 from mathutils import Vector  # type: ignore
+
+# ----------------------------------------------------------------------------------------------
+# material catalogue. K.M(name) builds on demand. Besides these names, ANY colour works:
+#   "#c9a58b"            limewash/painted plaster in that colour
+#   "plaster:#hex" "zellige:#hex" "subway:#hex" "hex_tile:#hex" "square_tile:#hex" "terracotta:#hex"
+#   "veneer:#hex" "planks:#hex" "brick_paint:#hex" "concrete:#hex" "velvet:#hex" "boucle:#hex"
+#   "linen:#hex" "leather:#hex" "felt:#hex"
+# Textures tile at their true real-world size (from each folder's meta.json).
+# ----------------------------------------------------------------------------------------------
+FAMILIES = {"plaster": "plaster", "limewash": "beige_plaster", "zellige": "zellige", "subway": "subway", "hex_tile": "hex_tile", "square_tile": "square_tile",
+            "terracotta": "terracotta_tile", "veneer": "veneer_b", "planks": "hinoki", "brick_paint": "brick_dark", "concrete": "concrete_brushed",
+            "velvet": "velvet", "boucle": "boucle_teddy", "linen": "linen", "leather": "leather_white", "felt": "fabric", "marble": "marble_carrara"}
+CATALOG = {
+    # timber
+    "oak": ("oak", "#c79f6e", 0.75), "oak_pale": ("oak_light", "#d9bf97", 0.8), "oak_smoked": ("oak_light", "#6a4b34", 0.7), "ash": ("ash", "#dcccb0", 0.8),
+    "walnut": ("veneer_a", "#5e3d29", 0.65), "walnut_slat": ("veneer_a", "#54351f", 0.65), "mahogany": ("veneer_b", "#4f2319", 0.5), "ebony": ("veneer_c", "#221e1b", 0.5),
+    "hinoki": ("hinoki", None, 0.85), "cedar": ("cedar", "#a8703f", 0.8), "old_boards": ("old_boards", None, 0.85), "parquet": ("parquet_herringbone", None, 0.6),
+    "parquet_dark": ("parquet_herringbone", "#59402b", 0.55), "parquet_pale": ("parquet_herringbone", "#c9ae85", 0.65), "tatami": ("tatami", None, 1.0),
+    # plaster, concrete, masonry
+    "plaster": ("plaster", "#ece3d3", 1.0), "plaster_white": ("plaster", "#f2eee6", 1.0), "plaster_warm": ("plaster", "#dccdb5", 1.0), "lime_plaster": ("beige_plaster", "#d9ccb4", 1.0),
+    "clay_plaster": ("clay_plaster", "#b78d68", 1.0), "concrete": ("concrete", "#a9a59d", 0.8), "concrete_dark": ("concrete_brushed", "#5b5956", 0.75), "concrete_ribbed": ("concrete_ribbed", "#9a968e", 0.9),
+    "brick_red": ("brick_red", None, 1.0), "brick_white": ("brick_dark", "#e8e3d8", 1.0), "brick_black": ("brick_dark", "#39363a", 0.9), "brick_stone": ("brick_white", None, 1.0), "brick_herringbone": ("brick_herringbone", None, 0.9),
+    # stone + tile
+    "terrazzo": ("terrazzo", None, 0.45), "marble": ("marble_carrara", None, 1.0), "marble_white": ("marble_carrara", None, 1.0), "marble_nero": ("marble", None, 0.35), "marble_verde": ("marble", "#27473a", 0.35),
+    "marble_rosso": ("marble", "#5c2a26", 0.35), "limestone": ("limestone_tile", None, 0.8), "stone": ("limestone_tile", "#b9b4ab", 0.8), "slate": ("slate", "#4a4644", 0.7), "granite": ("granite_tile", None, 0.6),
+    "tile_check": ("checker", None, 0.45), "tile_white": ("subway", "#f2efe7", 1.0), "tile_stone_check": ("tile_patterned", None, 0.55), "tile_diamond": ("tile_interior", None, 0.55), "marble_mosaic": ("marble_mosaic", None, 0.5), "marble_tile": ("marble_tile", None, 0.5),
+    # outdoors
+    "paving": ("paving", "#9b968c", 1.0), "paving_herringbone": ("paving_herringbone", "#8f8678", 1.0), "cobble": ("cobble", None, 1.0),
+    # textiles
+    "rattan": ("hessian", "#c8a978", 1.0), "hessian": ("hessian", None, 1.0), "corduroy": ("corduroy", "#8a6a4a", 1.0), "rug": ("hessian", "#8d6e55", 1.0),
+    "boucle": ("boucle_teddy", "#e6dfd0", 1.0), "boucle_sage": ("boucle_teddy", "#9fae95", 1.0), "leather": ("leather_brown", "#6b4a35", 0.7), "felt": ("fabric", "#2a2620", 1.0),
+    "brushed_steel": ("brushed_steel", "#c9cbce", 1.0),
+}
+METAL_PBR = {"brushed_steel"}
 
 # ----------------------------------------------------------------------------------------------
 # small helpers
@@ -98,19 +134,54 @@ def project_uvs(bm, scale=1.0):
     return bm
 
 
+def crisp_smooth(bm, angle=32.0):
+    """Shade smooth but keep edges sharper than `angle` crisp, so bevels catch a real highlight."""
+    bm.normal_update()
+    lim = math.radians(angle)
+    for f in bm.faces:
+        f.smooth = True
+    for e in bm.edges:
+        e.smooth = len(e.link_faces) == 2 and e.calc_face_angle(0.0) < lim
+
+
+def lathe_into(bm, profile, center, seg=14):
+    """Revolve a (radius, z) profile about +Z into an existing bmesh (fast, for repeated props)."""
+    cx, cy, cz = center
+    rings = []
+    for r, z in profile:
+        if r <= 1e-6:
+            rings.append([bm.verts.new((cx, cy, cz + z))])
+        else:
+            rings.append([bm.verts.new((cx + r * math.cos(2 * math.pi * k / seg), cy + r * math.sin(2 * math.pi * k / seg), cz + z)) for k in range(seg)])
+    for a, b in zip(rings, rings[1:]):
+        for k in range(seg):
+            if len(a) == 1:
+                bm.faces.new((a[0], b[k], b[(k + 1) % seg]))
+            elif len(b) == 1:
+                bm.faces.new((a[k], b[0], a[(k + 1) % seg]))
+            else:
+                bm.faces.new((a[k], a[(k + 1) % seg], b[(k + 1) % seg], b[k]))
+
+
 # ----------------------------------------------------------------------------------------------
 # the kit
 # ----------------------------------------------------------------------------------------------
 
 class Kit:
-    def __init__(self, scene, textures_dir=None, seed=None, collection="Cafe", clear=True):
+    def __init__(self, scene, textures_dir=None, seed=None, style=None, collection="Cafe", clear=True):
+        """seed: the runner passes a fresh SEED per design, so every run differs even on the same plan
+        (without one, the plan geometry is hashed, which repeats). style: design language, selects which
+        library variants may appear (industrial, scandinavian, japandi, bistro, mediterranean, deco,
+        midcentury, biophilic, brutalist, retro, modern, cozy)."""
         self.scene = scene
         self.tex = textures_dir
-        # Seed derived from the plan when not given: the SAME plan is reproducible, but DIFFERENT
-        # plans get different furniture variants/styling — so no two cafés look identical.
         if seed is None:
             seed = self._seed_from_scene(scene)
+        self.seed = seed
         self.rng = random.Random(seed)
+        self._mood = "day"
+        self._runs = []       # counters/back bars, so equipment can sit on them
+        self._occupied = []   # (x, y, radius) of placed equipment
         self.sc = bpy.context.scene
         if clear:
             self.clear_scene()
@@ -121,7 +192,7 @@ class Kit:
         self.stops = []   # suggested camera standing points (x, y, yaw_deg, label)
         self.cameras = []
         # ---- real-asset library (curated GLBs) ----
-        self.style = None                 # designs may set K.style = "modern" etc. to bias variant choice
+        self.style = style
         self._here = os.path.dirname(os.path.abspath(__file__))
         self.assets_root = os.path.join(self._here, "assets")
         self.models_dir = os.path.join(self.assets_root, "models")
@@ -195,8 +266,8 @@ class Kit:
         return m
 
     def _tinted(self, img, tint, roughness_mul=None):
-        """A packed copy of `img` multiplied by `tint` (or, for roughness maps, scaled by roughness_mul),
-        so the colour survives glTF export (the exporter cannot bake node maths)."""
+        """Packed copy of `img` recoloured so its MEAN lands exactly on `tint` (variation kept, works on dark or
+        light sources), or a roughness map scaled by roughness_mul. Baked so colour survives glTF export."""
         key = (img.name, tint, roughness_mul)
         if key in self._img_cache:
             return self._img_cache[key]
@@ -213,8 +284,9 @@ class Kit:
             px[:, :3] = np.clip(px[:, :3] * roughness_mul, 0.0, 1.0)
         else:
             h = tint.lstrip("#")
-            c = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
-            px[:, :3] *= np.array(c, dtype=np.float32)
+            c = np.array([int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)], dtype=np.float32)
+            lum = px[:, :3].mean(axis=1, keepdims=True)
+            px[:, :3] = np.clip(c * (lum / max(float(lum.mean()), 1e-3)), 0.0, 1.0)
         t.pixels.foreach_set(px.ravel())
         t.update()
         try:
@@ -224,11 +296,16 @@ class Kit:
         self._img_cache[key] = t
         return t
 
-    def mat_pbr(self, name, folder, tint="#ffffff", scale=1.0, roughness_mul=1.0, metallic=0.0):
-        """PBR from textures/<folder>/{color,normal,rough}.jpg, tinted and tiled (scale = tiles/m).
-        Built the way the glTF exporter understands: UV → Mapping → Image → Principled."""
+    def mat_pbr(self, name, folder, tint="#ffffff", scale=None, roughness_mul=1.0, metallic=0.0):
+        """PBR from textures/<folder>/{color,normal,rough}.jpg, tinted and tiled (scale = tiles/m, default: the
+        texture's true real-world size). Built the way the glTF exporter understands: UV → Mapping → Image → Principled."""
         if name in self.mats:
             return self.mats[name]
+        if scale is None:
+            try:
+                scale = 1.0 / json.load(open(os.path.join(self.tex, folder, "meta.json")))["size_m"][0]
+            except Exception:
+                scale = 1.0
         m = bpy.data.materials.new(name)
         m.use_nodes = True
         nt = m.node_tree
@@ -280,69 +357,98 @@ class Kit:
         return self.mat_pbr(name, "checker", "#ffffff", scale=1.0 / (2 * scale), roughness_mul=0.5)
 
     def _build_materials(self):
-        M = self.mats
-        self.mat_pbr("plaster", "plaster", "#ece3d3", scale=0.5)
-        self.mat_pbr("plaster_warm", "plaster", "#d9c9b0", scale=0.5)
-        self.mat_pbr("oak", "oak", "#d8b98c", scale=0.7, roughness_mul=0.7)   # satin/oiled, picks up soft reflections
-        self.mat_pbr("walnut", "wood", "#8a5a3c", scale=0.9, roughness_mul=0.7)
-        self.mat_pbr("walnut_slat", "wood", "#7a4a30", scale=1.8, roughness_mul=0.7)
-        self.mat_pbr("lime_plaster", "plaster", "#cdbfa6", scale=0.5)
-        self.mat_pbr("tile_white", "marble", "#f4f1ea", scale=0.9, roughness_mul=0.5)
-        self.mat_pbr("rattan", "fabric", "#c8a978", scale=4.0)
-        self.mat_pbr("terrazzo", "terrazzo", "#ffffff", scale=0.8, roughness_mul=0.5)
-        self.mat_pbr("stone", "concrete", "#b9b4ab", scale=0.25, roughness_mul=0.7)
-        self.mat_pbr("concrete", "concrete", "#a8a39a", scale=0.5, roughness_mul=0.72)   # polished concrete sheen
-        self.mat_pbr("marble", "marble", "#f2eee6", scale=0.6, roughness_mul=0.4)
-        self.mat_plain("boucle", "#d8ccb8", roughness=1.0)
-        self.mat_plain("boucle_sage", "#9fae95", roughness=1.0)
-        self.mat_plain("leather", "#6b4a35", roughness=0.55, coat=0.2)
+        """Plain (non-image) finishes. Image-based ones build on demand in M()."""
         self.mat_plain("ceiling", "#2d2b29", roughness=0.95)
+        self.mat_plain("ceiling_light", "#ece7dd", roughness=0.9)
         self.mat_plain("sage", "#9aa88f", roughness=0.9)
-        self.mat_plain("terracotta", "#b9704f", roughness=0.9)
+        self.mat_plain("terracotta_paint", "#b9704f", roughness=0.9)
         self.mat_plain("ink", "#20262a", roughness=0.9)
         self.mat_plain("ochre", "#c9a15a", roughness=0.9)
-        self.mat_plain("felt", "#2a2620", roughness=1.0)
-        self.mat_plain("rug", "#8d6e55", roughness=1.0)
         self.mat_plain("mirror", "#e8e8e8", roughness=0.02, metallic=1.0)
-        self.mat_plain("neon", "#000000", emission="#ff9a6a", strength=30.0)
-        self.mat_plain("bulb", "#000000", emission="#ffd9a0", strength=20.0)
+        self.mat_plain("neon", "#000000", emission="#ff9a6a", strength=14.0)
+        self.mat_plain("bulb", "#000000", emission="#ffd9a0", strength=14.0)
         self.mat_plain("paper", "#efe6d4", roughness=0.9)
-        self.mat_checker("tile_check", "#e9e2d6", "#3a3632", scale=0.3)
-        self.mat_plain("ceiling_light", "#e9e3d8", roughness=0.9)
         self.mat_plain("black", "#161616", roughness=0.5)
-        self.mat_plain("black_steel", "#1d1d1e", roughness=0.45, metallic=0.6)
+        self.mat_plain("black_steel", "#1d1d1e", roughness=0.42, metallic=0.75)
         self.mat_plain("charcoal", "#3b3a39", roughness=0.8)
         self.mat_plain("steel", "#b9bcbf", roughness=0.28, metallic=1.0)
-        self.mat_plain("brass", "#bf9659", roughness=0.3, metallic=1.0)
-        self.mat_plain("bronze", "#8a6a48", roughness=0.42, metallic=0.9)
-        self.mat_plain("copper", "#b0623b", roughness=0.3, metallic=1.0)
+        self.mat_plain("chrome", "#e6e7e9", roughness=0.07, metallic=1.0)
+        self.mat_plain("brass", "#c49a56", roughness=0.27, metallic=1.0)
+        self.mat_plain("bronze", "#8a6a48", roughness=0.4, metallic=0.95)
+        self.mat_plain("copper", "#b76e45", roughness=0.28, metallic=1.0)
         self.mat_plain("cream", "#eae2d3", roughness=0.8)
         self.mat_plain("white", "#f4f1ea", roughness=0.5)
-        self.mat_plain("cup", "#f4f1ea", roughness=0.45, coat=0.3)
+        self.mat_plain("cup", "#f4f1ea", roughness=0.25, coat=0.5)
         self.mat_plain("kraft", "#b48a5a", roughness=0.8)
         self.mat_plain("pastry", "#c98d4d", roughness=0.7)
         self.mat_plain("pastry_dark", "#8a5a30", roughness=0.7)
-        self.mat_plain("greens", "#5f7f46", roughness=0.9)
-        self.mat_plain("olive_green", "#7d8a66", roughness=1.0)
+        self.mat_plain("leaf_a", "#4d6b3a", roughness=0.55)
+        self.mat_plain("leaf_b", "#6d8a4d", roughness=0.6)
+        self.mat_plain("leaf_dark", "#23331c", roughness=0.9)
+        self.mat_plain("leaf_olive", "#7c8a68", roughness=0.7)
+        self.mat_plain("leaf_olive2", "#99a585", roughness=0.75)
+        self.mat_plain("greens", "#5f7f46", roughness=0.8)
+        self.mat_plain("olive_green", "#7d8a66", roughness=0.9)
         self.mat_plain("bark", "#5e5145", roughness=1.0)
-        self.mat_plain("pot", "#a69f95", roughness=0.9)
+        self.mat_plain("pot", "#a69f95", roughness=0.85)
+        self.mat_plain("soil", "#2c2219", roughness=1.0)
         self.mat_plain("canvas", "#eee8da", roughness=0.95)
         self.mat_plain("enamel_sage", "#9fae95", roughness=0.25, coat=0.6)
         self.mat_plain("matte_black", "#1a1a1a", roughness=0.6)
-        self.mat_plain("screen", "#0d0f12", roughness=0.15, emission="#1b2430", strength=1.6)
-        self.mat_plain("menu_glow", "#17110d", roughness=0.3, emission="#2a211a", strength=2.5)
-        self.mat_plain("led", "#000000", emission="#ffc78a", strength=18.0)
-        self.mat_plain("led_cool", "#000000", emission="#fff0d6", strength=12.0)
-        self.mat_plain("opal", "#f3ece0", roughness=0.4, emission="#ffd29a", strength=6.0)
-        self.mat_plain("lens", "#000000", emission="#fff0d6", strength=25.0)
+        self.mat_plain("screen", "#0d0f12", roughness=0.15, emission="#3a5468", strength=1.2)
+        self.mat_plain("led", "#000000", emission="#ffc78a", strength=7.0)
+        self.mat_plain("led_cool", "#000000", emission="#fff0d6", strength=6.0)
+        self.mat_plain("opal", "#f3ece0", roughness=0.4, emission="#ffd29a", strength=3.5)
+        self.mat_plain("lens", "#000000", emission="#fff0d6", strength=9.0)
         self.mat_plain("red", "#9b2d20", roughness=0.5)
         self.mat_plain("beans", "#4a2a16", roughness=0.7)
+        self.mat_plain("roof", "#3a3a3c", roughness=0.9)
+        self.mat_plain("rubber", "#111111", roughness=0.9)
         self.mat_glass("glass")
         self.mat_glass("display_glass", "#eef7f5")
         self.mat_plain("dark_glass", "#1b2326", roughness=0.12, metallic=0.3)
 
+    def mat_image(self, name, path, roughness=0.5, emit=0.0):
+        """Material from one image file (art prints, menu boards). emit>0 makes it glow (screens)."""
+        if name in self.mats:
+            return self.mats[name]
+        m = bpy.data.materials.new(name)
+        m.use_nodes = True
+        nt = m.node_tree
+        p = _principled(m)
+        p.inputs["Roughness"].default_value = roughness
+        img = self._img(path)
+        if img:
+            uv = nt.nodes.new("ShaderNodeTexCoord")
+            t = nt.nodes.new("ShaderNodeTexImage")
+            t.image = img
+            t.extension = "CLIP"
+            nt.links.new(uv.outputs["UV"], t.inputs["Vector"])
+            nt.links.new(t.outputs["Color"], p.inputs["Base Color"])
+            if emit:
+                nt.links.new(t.outputs["Color"], p.inputs["Emission Color"])
+                p.inputs["Emission Strength"].default_value = emit
+        self.mats[name] = m
+        return m
+
     def M(self, name):
-        return self.mats[name]
+        """Material by name: a catalogue entry, a plain finish, "#hex" (painted plaster) or "family:#hex"."""
+        if name in self.mats:
+            return self.mats[name]
+        if name.startswith("#"):
+            return self.mat_pbr(name, "plaster", name, roughness_mul=1.0)
+        if ":" in name:
+            fam, col = name.split(":", 1)
+            folder = FAMILIES.get(fam)
+            if folder:
+                rough = {"zellige": 1.0, "subway": 1.0, "hex_tile": 1.0, "square_tile": 1.0, "veneer": 0.65, "planks": 0.8, "leather": 0.7}.get(fam, 1.0)
+                return self.mat_pbr(name, folder, col, roughness_mul=rough)
+        spec = CATALOG.get(name)
+        if spec:
+            folder, tint, rough = spec
+            return self.mat_pbr(name, folder, tint or "#ffffff", roughness_mul=rough, metallic=1.0 if name in METAL_PBR else 0.0)
+        print(f"[cafe_kit] unknown material {name!r}, using plaster", flush=True)
+        return self.M("plaster")
 
     # ---------------- real-asset library (curated GLBs) ----------------
     def _seed_from_scene(self, scene):
@@ -404,6 +510,8 @@ class Kit:
         return rec
 
     def pick_asset(self, category, style=None, variant=None):
+        """One model per category per café (coherent inside a building), chosen with the run's seed from the
+        variants tagged for the design style, so different runs get different furniture."""
         items = self.manifest.get(category)
         if not items:
             return None
@@ -411,14 +519,13 @@ class Kit:
             for it in items:
                 if it.get("variant") == variant:
                     return it
-        # one model per category per café: choose once, then reuse — coherent within a building,
-        # different across buildings (via the scene-derived seed).
-        if category in self._chosen:
-            return self._chosen[category]
-        style = style or self.style
-        pool = [it for it in items if style in it.get("style_tags", [])] if style else items
+        key = (category, style or self.style)
+        if key in self._chosen:
+            return self._chosen[key]
+        st = style or self.style
+        pool = [it for it in items if st in it.get("style_tags", [])] if st else items
         chosen = self.rng.choice(pool or items)
-        self._chosen[category] = chosen
+        self._chosen[key] = chosen
         return chosen
 
     def place(self, category, at, rot=0.0, style=None, variant=None, fit=None,
@@ -456,13 +563,19 @@ class Kit:
         return objs
 
     # ---------------- geometry primitives ----------------
-    def box(self, name, size, loc, rot=0.0, mat=None, coll=None):
-        """Axis box: size (w along x, d along y, h), loc = centre (x, y, z), rot degrees about Z."""
+    def box(self, name, size, loc, rot=0.0, mat=None, coll=None, bevel=None):
+        """Box: size (w along x, d along y, h), loc = centre (x, y, z), rot degrees about Z. Edges get a small
+        real bevel so they catch light like joinery (bevel=0 for flush architecture)."""
         mesh = bpy.data.meshes.new(name)
         bm = bmesh.new()
-        bmesh.ops.create_cube(bm, size=1.0)
-        bmesh.ops.scale(bm, vec=(max(size[0], 1e-4), max(size[1], 1e-4), max(size[2], 1e-4)), verts=bm.verts)
-        bm.normal_update()
+        res = bmesh.ops.create_cube(bm, size=1.0)
+        sz = (max(size[0], 1e-4), max(size[1], 1e-4), max(size[2], 1e-4))
+        bmesh.ops.scale(bm, vec=sz, verts=res["verts"])
+        if bevel is None:
+            bevel = 0.0035 if min(sz) > 0.012 else 0.0
+        if bevel > 0 and min(sz) > bevel * 2.2:
+            bmesh.ops.bevel(bm, geom=list(bm.edges), offset=bevel, offset_type="OFFSET", segments=2 if bevel > 0.01 else 1, profile=0.5, affect="EDGES", clamp_overlap=True)
+        crisp_smooth(bm)
         project_uvs(bm)
         bm.to_mesh(mesh)
         bm.free()
@@ -488,6 +601,27 @@ class Kit:
         o = bpy.data.objects.new(name, mesh)
         o.location = (loc[0], loc[1], loc[2] + h / 2)
         o.rotation_euler = tuple(math.radians(a) for a in rot)
+        if mat:
+            o.data.materials.append(mat)
+        (coll or self.coll).objects.link(o)
+        return o
+
+    def rod(self, name, p0, p1, r, mat=None, segments=12, coll=None):
+        """Round bar between two 3D points (rails, spouts, branches, ribs, rods at any angle)."""
+        a, b = Vector(p0), Vector(p1)
+        d = b - a
+        L = d.length or 1e-4
+        mesh = bpy.data.meshes.new(name)
+        bm = bmesh.new()
+        bmesh.ops.create_cone(bm, cap_ends=True, segments=segments, radius1=r, radius2=r, depth=L)
+        crisp_smooth(bm, 50.0)
+        project_uvs(bm)
+        bm.to_mesh(mesh)
+        bm.free()
+        o = bpy.data.objects.new(name, mesh)
+        o.rotation_mode = "QUATERNION"
+        o.rotation_quaternion = d.to_track_quat("Z", "Y")
+        o.location = (a + b) * 0.5
         if mat:
             o.data.materials.append(mat)
         (coll or self.coll).objects.link(o)
@@ -565,13 +699,14 @@ class Kit:
         return (ux, uy), (nx, ny), L, math.degrees(math.atan2(dy, dx))
 
     # ---------------- architecture from the plan ----------------
-    def architecture(self, wall="plaster", floors=None, ceiling="ceiling", skirting=True, downlights=True, glazing=True):
-        """Walls with doors/windows, floors per room category, ceilings with a downlight grid.
-        floors: {category: material name}, e.g. {"seating_indoor": "oak", "service_counter": "stone",
-        "seating_outdoor": "stone", "wc": "concrete"}."""
+    def architecture(self, wall="plaster", floors=None, ceiling="plaster_white", skirting=True, downlights=True, glazing=True,
+                     ground="paving", skirt_mat="charcoal", frame_mat="black_steel", door_mat="oak_smoked", context=True):
+        """The building shell from the plan: walls, glazed windows with frames, real doors (frames, thresholds, leaves),
+        floors per room category, ceilings, roof, site ground and neighbours. floors: {category: material}."""
         S = self.scene
         floors = floors or {}
         wm = self.M(wall)
+        fr = self.M(frame_mat)
         openings = S.get("openings", [])
         arch = self._collection("Architecture")
         for w in S["walls"]:
@@ -581,7 +716,7 @@ class Kit:
                 continue
             ang = math.degrees(math.atan2(by - ay, bx - ax))
             ux, uy = (bx - ax) / L, (by - ay) / L
-            H = w["height"]; t = w["thickness"]; base = w.get("baseHeight") or 0.0
+            H = max(w["height"], self._adjacent_ceiling(w)); t = w["thickness"]; base = w.get("baseHeight") or 0.0
             ops = sorted([o for o in openings if o["wallId"] == w["id"]], key=lambda o: o["offset"])
             segs = []
             cursor = 0.0
@@ -599,6 +734,8 @@ class Kit:
                     segs.append((s0, s1, top, H, "header"))
                 if op["type"] == "window" and glazing:
                     segs.append((s0, s1, sill, top, "glass"))
+                elif op["type"] != "window":
+                    segs.append((s0, s1, 0.0, top, "door"))
                 cursor = max(cursor, s1)
             if cursor < L - 1e-4:
                 segs.append((cursor, L, 0.0, H, "solid"))
@@ -606,31 +743,340 @@ class Kit:
                 u = (s0 + s1) / 2
                 cx, cy = ax + ux * u, ay + uy * u
                 if kind == "glass":
-                    self.box(f"glass_{w['id']}", (s1 - s0, 0.02, z1 - z0), (cx, cy, base + (z0 + z1) / 2), ang, self.M("glass"), arch)
-                    # frame + mullions
-                    fr = self.M("black")
-                    for zz in (z0 + 0.03, z1 - 0.03):
-                        self.box(f"frame_{w['id']}", (s1 - s0, t + 0.02, 0.06), (cx, cy, base + zz), ang, fr, arch)
-                    n = max(1, int((s1 - s0) / 1.2))
-                    for k in range(n + 1):
-                        uu = s0 + (s1 - s0) * k / n
-                        self.box(f"mullion_{w['id']}", (0.05, t + 0.02, z1 - z0), (ax + ux * uu, ay + uy * uu, base + (z0 + z1) / 2), ang, fr, arch)
+                    self._window(w, cx, cy, ang, s0, s1, z0 + base, z1 + base, t, fr, arch)
+                elif kind == "door":
+                    self._door(w, cx, cy, ang, s1 - s0, z1, t, fr, self.M(door_mat), arch)
                 else:
-                    self.box(f"wall_{w['id']}_{kind}", (s1 - s0, t, z1 - z0), (cx, cy, base + (z0 + z1) / 2), ang, wm, arch)
+                    self.box(f"wall_{w['id']}_{kind}", (s1 - s0, t, z1 - z0), (cx, cy, base + (z0 + z1) / 2), ang, wm, arch, bevel=0)
                     if kind == "solid" and skirting:
-                        self.box(f"skirt_{w['id']}", (s1 - s0, t + 0.02, 0.1), (cx, cy, base + 0.05), ang, self.M("charcoal"), arch)
+                        self.box(f"skirt_{w['id']}", (s1 - s0, t + 0.024, 0.11), (cx, cy, base + 0.055), ang, self.M(skirt_mat), arch)
+        top = max((w["height"] for w in S["walls"]), default=3.0)
         for room in S["rooms"]:
             cat = room.get("category", "other")
-            fm = floors.get(cat) or ("stone" if cat in ("seating_outdoor",) else "oak" if cat in ("seating_indoor", "entrance", "corridor") else "stone" if cat == "service_counter" else "concrete")
+            fm = floors.get(cat) or floors.get(room["id"]) or ("paving" if cat == "seating_outdoor" else "oak" if cat in ("seating_indoor", "entrance", "corridor") else "stone" if cat == "service_counter" else "concrete")
             self.slab(f"floor_{room['id']}", room["polygon"], 0.0, self.M(fm), coll=arch)
             ch = room.get("ceilingHeight") or 0
             if ch > 0:
                 self.slab(f"ceiling_{room['id']}", room["polygon"], ch, self.M(ceiling), coll=arch)
+                self.slab(f"ceiling_roof_{room['id']}", room["polygon"], max(top, ch + 0.2), self.M("roof"), coll=arch)
                 if downlights:
                     self.downlights(room["polygon"], ch, coll=arch)
+        self._site(ground, context, arch)
         return arch
 
-    def downlights(self, polygon, z, step=2.2, margin=0.7, power=34.0, coll=None):
+    def _adjacent_ceiling(self, w):
+        """Highest ceiling of a room touching this wall, so a low partition is carried up as a bulkhead (no sky gap)."""
+        ax, ay = w["a"]; bx, by = w["b"]
+        L = math.hypot(bx - ax, by - ay) or 1.0
+        nx, ny = -(by - ay) / L, (bx - ax) / L
+        off = w["thickness"] / 2 + 0.08
+        best = 0.0
+        for t in (0.1, 0.3, 0.5, 0.7, 0.9):
+            x, y = ax + (bx - ax) * t, ay + (by - ay) * t
+            for sd in (1, -1):
+                r = self._room_at(x + nx * off * sd, y + ny * off * sd)
+                if r:
+                    best = max(best, r.get("ceilingHeight") or 0.0)
+        return best
+
+    def _room_at(self, x, y):
+        for r in self.scene["rooms"]:
+            if point_in_poly(r["polygon"], x, y):
+                return r
+        return None
+
+    def _window(self, w, cx, cy, ang, s0, s1, z0, z1, t, fr, arch):
+        width = s1 - s0
+        r = math.radians(ang)
+        ux, uy = math.cos(r), math.sin(r)
+        self.box(f"glass_{w['id']}", (width, 0.016, z1 - z0), (cx, cy, (z0 + z1) / 2), ang, self.M("glass"), arch, bevel=0)
+        for zz, tk in ((z0 + 0.03, 0.06), (z1 - 0.03, 0.06)):
+            self.box(f"frame_{w['id']}", (width, t + 0.024, tk), (cx, cy, zz), ang, fr, arch)
+        n = max(1, int(width / 1.15))
+        for k in range(n + 1):
+            d = -width / 2 + width * k / n
+            self.box(f"mullion_{w['id']}", (0.055, t * 0.7, z1 - z0), (cx + ux * d, cy + uy * d, (z0 + z1) / 2), ang, fr, arch)
+        if z1 - z0 > 2.0:   # storefront transom
+            self.box(f"mullion_{w['id']}_tr", (width, t * 0.7, 0.045), (cx, cy, z1 - 0.55), ang, fr, arch)
+
+    def _door(self, w, cx, cy, ang, width, height, t, fr, leaf, arch):
+        """Frame, threshold and a door leaf. Glazed entrance leaves on the envelope; timber leaf standing open inside."""
+        r = math.radians(ang)
+        ux, uy = math.cos(r), math.sin(r)
+        nx, ny = -uy, ux
+        for sd in (-1, 1):
+            self.box(f"frame_jamb_{w['id']}", (0.06, t + 0.03, height), (cx + ux * sd * (width / 2 - 0.03), cy + uy * sd * (width / 2 - 0.03), height / 2), ang, fr, arch)
+        self.box(f"frame_head_{w['id']}", (width, t + 0.03, 0.07), (cx, cy, height - 0.035), ang, fr, arch)
+        self.box(f"floor_threshold_{w['id']}", (width, t + 0.06, 0.012), (cx, cy, 0.006), ang, self.M("brass" if w.get("exterior") else "charcoal"), arch)
+        inner_w = width - 0.12
+        if w.get("exterior"):
+            # aluminium-framed glass leaf with a long pull handle (glass_/frame_ names stay walkable on the web)
+            n = 2 if width > 1.25 else 1
+            lw = inner_w / n
+            for i in range(n):
+                d = -inner_w / 2 + lw * (i + 0.5)
+                lx, ly = cx + ux * d, cy + uy * d
+                self.box(f"glass_door_{w['id']}", (lw - 0.02, 0.012, height - 0.1), (lx, ly, (height - 0.07) / 2), ang, self.M("glass"), arch, bevel=0)
+                for sd in (-1, 1):
+                    self.box(f"frame_leaf_{w['id']}", (0.05, 0.04, height - 0.1), (lx + ux * sd * (lw / 2 - 0.035), ly + uy * sd * (lw / 2 - 0.035), (height - 0.07) / 2), ang, fr, arch)
+                for zz in (0.1, height - 0.13):
+                    self.box(f"frame_rail_{w['id']}", (lw - 0.04, 0.04, 0.12 if zz < 1 else 0.05), (lx, ly, zz), ang, fr, arch)
+                hx = lx + ux * (lw / 2 - 0.1) * (1 if i == 0 and n == 2 else -1)
+                for sd in (-1, 1):
+                    self.cyl(f"frame_pull_{w['id']}", 0.012, 1.0, (hx + nx * sd * 0.055, (ly + uy * (lw / 2 - 0.1) * (1 if i == 0 and n == 2 else -1)) + ny * sd * 0.055, 0.6), self.M("brass"), 12, coll=arch)
+        else:
+            # timber leaf open at 95 degrees into the room, hinged on one jamb
+            hx, hy = cx - ux * inner_w / 2, cy - uy * inner_w / 2
+            sd = 1 if self._room_at(cx + nx * (t / 2 + 0.2), cy + ny * (t / 2 + 0.2)) else -1
+            a = math.radians(ang + 95 * sd)
+            lx, ly = hx + math.cos(a) * inner_w / 2, hy + math.sin(a) * inner_w / 2
+            self.box(f"frame_doorleaf_{w['id']}", (inner_w, 0.04, height - 0.08), (lx, ly, (height - 0.08) / 2), math.degrees(a), leaf, arch)
+            kx, ky = hx + math.cos(a) * (inner_w - 0.07), hy + math.sin(a) * (inner_w - 0.07)
+            self.rod(f"frame_knob_{w['id']}", (kx - math.sin(a) * 0.07, ky + math.cos(a) * 0.07, 1.03), (kx + math.sin(a) * 0.07, ky - math.cos(a) * 0.07, 1.03), 0.013, self.M("brass"), 12, arch)
+
+    def _site(self, ground, context, arch):
+        """Ground around the building (no void at door thresholds) and quiet neighbours on the horizon."""
+        xs, ys = [], []
+        for w in self.scene["walls"]:
+            xs += [w["a"][0], w["b"][0]]; ys += [w["a"][1], w["b"][1]]
+        for r in self.scene["rooms"]:
+            xs += [p[0] for p in r["polygon"]]; ys += [p[1] for p in r["polygon"]]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        M = 90.0
+        self.slab("floor_site", [(x0 - M, y0 - M), (x1 + M, y0 - M), (x1 + M, y1 + M), (x0 - M, y1 + M)], -0.012, self.M(ground), coll=arch)
+        if not context:
+            return
+        tones = ["#bdb4a6", "#a79c8e", "#cabfb0", "#9d9a94"]
+        win = self.M("dark_glass")
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        for i, (dx, dy, w_, d_, h_) in enumerate(((0, -66, 70, 12, 9), (-68, -6, 12, 70, 9), (68, -8, 12, 70, 10), (0, 68, 80, 12, 9))):
+            m = self.mat_plain(f"ctx{i}", tones[i % 4], roughness=0.95)
+            self.box(f"wall_ctx_{i}", (w_, d_, h_), (cx + dx, cy + dy, h_ / 2), 0, m, arch, bevel=0)
+            alongx = w_ > d_
+            face = (dy < 0 and alongx) or (dx < 0 and not alongx)
+            n = int((w_ if alongx else d_) / 3.4)
+            for lv in range(int(h_ / 3.4)):
+                for k in range(n):
+                    off = -(n - 1) * 1.7 + k * 3.4
+                    z = 2.0 + lv * 3.4
+                    if alongx:
+                        y = cy + dy + (d_ / 2 + 0.03) * (1 if dy < 0 else -1)
+                        self.box(f"wall_ctxw_{i}", (1.5, 0.05, 1.9), (cx + dx + off, y, z), 0, win, arch, bevel=0)
+                    else:
+                        x = cx + dx + (w_ / 2 + 0.03) * (1 if dx < 0 else -1)
+                        self.box(f"wall_ctxw_{i}", (0.05, 1.5, 1.9), (x, cy + dy + off, z), 0, win, arch, bevel=0)
+
+    # ---------------- wall faces: lets a design finish every wall of a room without hand coordinates ----------------
+    def faces(self, target="all"):
+        """Interior wall faces, each {a, b, len, room, category, wall, ceil, openings:[(s0, s1, z0, z1)]}, with the room on the
+        LEFT of a→b so they plug straight into wall_panel / shelving_wall / banquette etc. target: "all", a room id or a room category."""
+        out = []
+        ops = self.scene.get("openings", [])
+        for w in self.scene["walls"]:
+            ax, ay = w["a"]; bx, by = w["b"]
+            L = math.hypot(bx - ax, by - ay)
+            if L < 0.2:
+                continue
+            ux, uy = (bx - ax) / L, (by - ay) / L
+            t = w["thickness"]
+            for sd in (1, -1):
+                nx, ny = -uy * sd, ux * sd
+                steps = max(2, int(L / 0.1))
+                cur = None
+                runs = []
+                for i in range(steps):
+                    u = (i + 0.5) * L / steps
+                    r = self._room_at(ax + ux * u + nx * (t / 2 + 0.08), ay + uy * u + ny * (t / 2 + 0.08))
+                    rid = r["id"] if r and (r.get("ceilingHeight") or 0) > 0 else None
+                    if rid != cur:
+                        if cur is not None:
+                            runs[-1][2] = (i) * L / steps
+                        if rid is not None:
+                            runs.append([rid, i * L / steps, L])
+                        cur = rid
+                for rid, s0, s1 in runs:
+                    if s1 - s0 < 0.25:
+                        continue
+                    room = next(r for r in self.scene["rooms"] if r["id"] == rid)
+                    if target not in ("all", rid, room.get("category")):
+                        continue
+                    pa = (ax + ux * s0 + nx * t / 2, ay + uy * s0 + ny * t / 2)
+                    pb = (ax + ux * s1 + nx * t / 2, ay + uy * s1 + ny * t / 2)
+                    gaps = []
+                    for o in ops:
+                        if o["wallId"] != w["id"]:
+                            continue
+                        o0, o1 = max(s0, o["offset"]), min(s1, o["offset"] + o["width"])
+                        if o1 - o0 < 0.05:
+                            continue
+                        sill = (o.get("sillHeight") or 0.9) if o["type"] == "window" else 0.0
+                        gaps.append((o0 - s0, o1 - s0, sill, sill + o["height"]))
+                    # travel so the room is on the left
+                    if sd == 1:
+                        a_, b_, g_ = pa, pb, sorted(gaps)
+                    else:
+                        ln = s1 - s0
+                        a_, b_, g_ = pb, pa, sorted((ln - g[1], ln - g[0], g[2], g[3]) for g in gaps)
+                    out.append({"a": a_, "b": b_, "len": s1 - s0, "room": rid, "category": room.get("category"), "wall": w["id"], "ceil": room.get("ceilingHeight") or 3.0, "openings": g_})
+        return out
+
+    def _skin(self, f, s0, s1, z0, z1, mat, thick=0.012, name="wall_finish", bevel=0):
+        if s1 - s0 < 0.01 or z1 - z0 < 0.005:
+            return
+        ax, ay = f["a"]; bx, by = f["b"]
+        L = f["len"]
+        ux, uy = (bx - ax) / L, (by - ay) / L
+        nx, ny = -uy, ux
+        u = (s0 + s1) / 2
+        self.box(name, (s1 - s0, thick, z1 - z0), (ax + ux * u + nx * thick / 2, ay + uy * u + ny * thick / 2, (z0 + z1) / 2), math.degrees(math.atan2(uy, ux)), mat, self._collection("Design"), bevel=bevel)
+
+    def _face_rects(self, f, z0, z1):
+        """Solid (s0, s1, z0, z1) rectangles of a face between heights, cut around doors and windows."""
+        rects = []
+        cur = 0.0
+        for (g0, g1, gz0, gz1) in f["openings"]:
+            if g0 > cur:
+                rects.append((cur, g0, z0, z1))
+            if gz0 > z0:
+                rects.append((g0, g1, z0, min(gz0, z1)))
+            if gz1 < z1:
+                rects.append((g0, g1, max(gz1, z0), z1))
+            cur = max(cur, g1)
+        if cur < f["len"]:
+            rects.append((cur, f["len"], z0, z1))
+        return rects
+
+    def finish_walls(self, target="all", finish=None, dado=None, dado_h=1.1, dado_style="plain", rail=None, crown=None, skirting=None, skirting_h=0.14, only_longest=False):
+        """Dress every wall of a room in one call. target: "all", a room id or a category. finish: wall material or "#hex".
+        dado: lower-wall material (zellige, subway, paint or timber) up to dado_h; dado_style "plain" | "panel" (raised panel moulding)
+        | "beadboard". rail: chair-rail material. crown: cornice material. skirting: tall skirting material."""
+        fs = self.faces(target)
+        if only_longest and fs:
+            fs = [max(fs, key=lambda f: f["len"])]
+        for f in fs:
+            ch = f["ceil"]
+            d = dado_h if dado else 0.0
+            if finish:
+                for (s0, s1, z0, z1) in self._face_rects(f, d, ch):
+                    self._skin(f, s0, s1, z0, z1, self.M(finish))
+            if dado:
+                dm = self.M(dado)
+                for (s0, s1, z0, z1) in self._face_rects(f, 0.0, d):
+                    self._skin(f, s0, s1, z0, z1, dm, thick=0.016)
+                    w_ = s1 - s0
+                    if dado_style == "panel" and z1 - z0 > 0.5:
+                        n = max(1, int(w_ / 0.75))
+                        pw = w_ / n
+                        for k in range(n):
+                            c = s0 + pw * (k + 0.5)
+                            ph, pz0, pz1 = pw - 0.12, z0 + 0.2, z1 - 0.1
+                            for (ss0, ss1, zz0, zz1) in ((c - ph / 2, c + ph / 2, pz1 - 0.025, pz1), (c - ph / 2, c + ph / 2, pz0, pz0 + 0.025), (c - ph / 2, c - ph / 2 + 0.025, pz0, pz1), (c + ph / 2 - 0.025, c + ph / 2, pz0, pz1)):
+                                self._skin(f, ss0, ss1, zz0, zz1, dm, thick=0.03, bevel=0.004)
+                    elif dado_style == "beadboard":
+                        for k in range(int(w_ / 0.09)):
+                            self._skin(f, s0 + k * 0.09, s0 + k * 0.09 + 0.012, z0, z1, dm, thick=0.022, bevel=0)
+                if rail is None:
+                    rail = dado if dado_style != "plain" else None
+            if rail and d:
+                for (s0, s1, z0, z1) in self._face_rects(f, d - 0.02, d + 0.03):
+                    self._skin(f, s0, s1, z0, z1, self.M(rail), thick=0.035, bevel=0.006)
+            if crown:
+                cm = self.M(crown)
+                for (s0, s1, z0, z1) in self._face_rects(f, ch - 0.14, ch):
+                    self._skin(f, s0, s1, max(z0, ch - 0.14), z1, cm, thick=0.03, bevel=0.005)
+                    self._skin(f, s0, s1, max(z0, ch - 0.07), z1, cm, thick=0.06, bevel=0.006)
+            if skirting:
+                sm = self.M(skirting)
+                for (s0, s1, z0, z1) in self._face_rects(f, 0.0, skirting_h):
+                    if z1 > 0 and z0 < 0.01:
+                        self._skin(f, s0, s1, z0, z1, sm, thick=0.03, bevel=0.004)
+        return len(fs)
+
+    def facade(self, material="brick_red", plinth="stone", plinth_h=0.45, cornice="plaster_white", pilasters=None, awning=None, band=None, band_z=None):
+        """Dress the street-facing envelope: cladding, plinth, cornice, optional pilasters, sign band and awnings over glazing."""
+        g = self._collection("Facade")
+        top = max((w["height"] for w in self.scene["walls"]), default=4.0)
+        ops = self.scene.get("openings", [])
+        n_faces = 0
+        for w in self.scene["walls"]:
+            ax, ay = w["a"]; bx, by = w["b"]
+            L = math.hypot(bx - ax, by - ay)
+            if L < 0.3:
+                continue
+            ux, uy = (bx - ax) / L, (by - ay) / L
+            t = w["thickness"]
+            mid = (ax + bx) / 2, (ay + by) / 2
+            for sd in (1, -1):
+                nx, ny = -uy * sd, ux * sd
+                here = self._room_at(mid[0] + nx * (t / 2 + 0.1), mid[1] + ny * (t / 2 + 0.1))
+                back = self._room_at(mid[0] - nx * (t / 2 + 0.1), mid[1] - ny * (t / 2 + 0.1))
+                if (here and (here.get("ceilingHeight") or 0) > 0) or not (back and (back.get("ceilingHeight") or 0) > 0):
+                    continue
+                n_faces += 1
+                # outer face travelling with the outside on the left
+                pa = (ax + nx * t / 2, ay + ny * t / 2); pb = (bx + nx * t / 2, by + ny * t / 2)
+                gaps = []
+                for o in ops:
+                    if o["wallId"] == w["id"]:
+                        sill = (o.get("sillHeight") or 0.9) if o["type"] == "window" else 0.0
+                        g0, g1 = o["offset"], o["offset"] + o["width"]
+                        gaps.append((g0, g1, sill, sill + o["height"]) if sd == 1 else (L - g1, L - g0, sill, sill + o["height"]))
+                f = {"a": pa if sd == 1 else pb, "b": pb if sd == 1 else pa, "len": L, "openings": sorted(gaps), "ceil": top}
+                for (s0, s1, z0, z1) in self._face_rects(f, plinth_h if plinth else 0.0, top):
+                    self._skin(f, s0, s1, z0, z1, self.M(material), thick=0.03, name="wall_clad")
+                if plinth:
+                    for (s0, s1, z0, z1) in self._face_rects(f, 0.0, plinth_h):
+                        self._skin(f, s0, s1, z0, z1, self.M(plinth), thick=0.05, name="wall_plinth", bevel=0.006)
+                if cornice:
+                    self._skin(f, -0.1, L + 0.1, top - 0.22, top, self.M(cornice), thick=0.09, name="wall_cornice", bevel=0.012)
+                    self._skin(f, -0.05, L + 0.05, top - 0.34, top - 0.22, self.M(cornice), thick=0.055, name="wall_cornice", bevel=0.008)
+                if band:
+                    bz = band_z or (max((g[3] for g in gaps), default=2.8) + 0.06)
+                    self._skin(f, 0.0, L, bz, bz + 0.62, self.M(band), thick=0.07, name="wall_band", bevel=0.01)
+                if pilasters and gaps:
+                    for s_ in {round(g[0] - 0.13, 3) for g in gaps} | {round(gaps[-1][1] + 0.13, 3)}:
+                        if 0.05 < s_ < L - 0.05:
+                            self._skin(f, s_ - 0.11, s_ + 0.11, 0, top - 0.34, self.M(pilasters), thick=0.08, name="wall_pilaster", bevel=0.01)
+                if awning:
+                    self._awning(f, gaps, awning, g)
+        return n_faces
+
+    def _awning(self, f, gaps, colour, g):
+        ax, ay = f["a"]; bx, by = f["b"]
+        L = f["len"]
+        ux, uy = (bx - ax) / L, (by - ay) / L
+        nx, ny = -uy, ux
+        ang = math.degrees(math.atan2(uy, ux))
+        col = self.mat_plain(f"awning_{colour}", colour, roughness=0.9)
+        for (g0, g1, gz0, gz1) in gaps:
+            w_ = g1 - g0 + 0.2
+            c = (g0 + g1) / 2
+            z = gz1 + 0.3
+            bm = bmesh.new()
+            n = 2
+            vs = []
+            for i in range(n):
+                t = i / (n - 1)
+                d = 0.03 + 0.85 * t
+                zz = z - 0.42 * t
+                vs.append((bm.verts.new((-w_ / 2, d, zz)), bm.verts.new((w_ / 2, d, zz))))
+            bm.faces.new((vs[0][1], vs[0][0], vs[1][0], vs[1][1]))
+            stripes = max(3, int(w_ / 0.32))
+            for k in range(stripes):
+                x0 = -w_ / 2 + w_ * k / stripes; x1 = x0 + w_ / stripes
+                a_, b_ = bm.verts.new((x0, 0.88, z - 0.42)), bm.verts.new((x1, 0.88, z - 0.42))
+                c_, d_ = bm.verts.new((x1 - 0.0, 0.885, z - 0.56)), bm.verts.new((x0 + 0.0, 0.885, z - 0.56))
+                bm.faces.new((a_, b_, c_, d_))
+            bm.normal_update(); project_uvs(bm)
+            me = bpy.data.meshes.new("awning")
+            bm.to_mesh(me); bm.free()
+            o = bpy.data.objects.new("wall_awning", me)
+            o.data.materials.append(col)
+            o.location = (ax + ux * c, ay + uy * c, 0)
+            o.rotation_euler = (0, 0, math.radians(ang))
+            g.objects.link(o)
+
+    def downlights(self, polygon, z, step=2.0, margin=0.6, power=60.0, coll=None):
         xs = [p[0] for p in polygon]; ys = [p[1] for p in polygon]
         n = 0
         x = min(xs) + margin
@@ -640,8 +1086,8 @@ class Kit:
                 if point_in_poly(polygon, x, y):
                     self.cyl(f"downlight", 0.055, 0.02, (x, y, z - 0.02), self.M("lens"), 16, coll=coll)
                     d = bpy.data.lights.new("downlight", "SPOT")
-                    d.energy = power; d.spot_size = math.radians(70); d.spot_blend = 0.6
-                    d.color = kelvin_to_rgb(3000); d.shadow_soft_size = 0.08
+                    d.energy = power; d.spot_size = math.radians(88); d.spot_blend = 0.8
+                    d.color = kelvin_to_rgb(3700); d.shadow_soft_size = 0.08
                     o = bpy.data.objects.new("downlight", d)
                     o.location = (x, y, z - 0.03)
                     o.rotation_euler = (0, 0, 0)  # spot points -Z
@@ -652,20 +1098,87 @@ class Kit:
         return n
 
     # ---------------- joinery & equipment ----------------
-    def counter_run(self, a, b, depth=0.7, h=0.95, top="terrazzo", front="walnut_slat", led_kick=True, top_thick=0.04, side=1, name="counter"):
-        """Service counter from a to b (plan points). The counter body extends `depth` to the LEFT of
-        the a→b direction (side=1) or right (side=-1): the customer stands on the other side."""
+    def _front(self, name, a, b, n, depth_off, z0, z1, front, g):
+        """Counter/case fronts. `front`: material, or "fluted:<mat>" (reeded), "slat:<mat>", "panel:<mat>", "tile:<mat>"."""
+        (ax, ay), (bx, by) = a, b
+        L = math.hypot(bx - ax, by - ay) or 1e-6
+        ux, uy = (bx - ax) / L, (by - ay) / L
+        nx, ny = n
+        ang = math.degrees(math.atan2(uy, ux))
+        style, mat = (front.split(":", 1) + [None])[:2] if front.split(":", 1)[0] in ("fluted", "slat", "panel", "tile") else ("flat", front)
+        if style == "flat" or style == "tile":
+            return self.box(f"{name}_front", (L, 0.015, z1 - z0), ((ax + bx) / 2 + nx * depth_off, (ay + by) / 2 + ny * depth_off, (z0 + z1) / 2), ang, self.M(mat), g, bevel=0.002)
+        if style == "panel":
+            self.box(f"{name}_front", (L, 0.012, z1 - z0), ((ax + bx) / 2 + nx * depth_off, (ay + by) / 2 + ny * depth_off, (z0 + z1) / 2), ang, self.M(mat), g, bevel=0)
+            n_ = max(1, int(L / 0.6))
+            for i in range(n_):
+                c = L * (i + 0.5) / n_
+                pw = L / n_ - 0.09
+                cx, cy = ax + ux * c + nx * (depth_off + 0.012), ay + uy * c + ny * (depth_off + 0.012)
+                self.box(f"{name}_pn", (pw, 0.018, z1 - z0 - 0.12), (cx, cy, (z0 + z1) / 2), ang, self.M(mat), g, bevel=0.007)
+            return None
+        # reeds (half-round, one mesh) or square slats
+        pitch = 0.034 if style == "fluted" else 0.055
+        r = pitch * 0.5
+        bm = bmesh.new()
+        ct = int(L / pitch)
+        for i in range(ct):
+            c = (i + 0.5) * L / ct
+            px, py = ax + ux * c + nx * depth_off, ay + uy * c + ny * depth_off
+            if style == "fluted":
+                segs = 7
+                bot, top = [], []
+                for k in range(segs):
+                    t = math.pi * k / (segs - 1)
+                    ox = math.cos(t) * r * 0.98
+                    oy = math.sin(t) * r * 0.9
+                    x, y = px + ux * ox + nx * oy, py + uy * ox + ny * oy
+                    bot.append(bm.verts.new((x, y, z0))); top.append(bm.verts.new((x, y, z1)))
+                for k in range(segs - 1):
+                    bm.faces.new((bot[k], bot[k + 1], top[k + 1], top[k]))
+            else:
+                w_ = pitch * 0.55
+                dd = 0.022
+                pts = [(-w_ / 2, 0), (w_ / 2, 0), (w_ / 2, dd), (-w_ / 2, dd)]
+                vs_b = [bm.verts.new((px + ux * o + nx * e, py + uy * o + ny * e, z0)) for o, e in pts]
+                vs_t = [bm.verts.new((px + ux * o + nx * e, py + uy * o + ny * e, z1)) for o, e in pts]
+                for k in range(4):
+                    bm.faces.new((vs_b[k], vs_b[(k + 1) % 4], vs_t[(k + 1) % 4], vs_t[k]))
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        crisp_smooth(bm, 70.0 if style == "fluted" else 32.0)
+        project_uvs(bm)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me); bm.free()
+        o = bpy.data.objects.new(f"{name}_reeds", me)
+        o.data.materials.append(self.M(mat))
+        g.objects.link(o)
+        self.box(f"{name}_front", (L, 0.012, z1 - z0), ((ax + bx) / 2 + nx * (depth_off - 0.004), (ay + by) / 2 + ny * (depth_off - 0.004), (z0 + z1) / 2), ang, self.M("black" if style == "slat" else mat), g, bevel=0)
+        return o
+
+    def counter_run(self, a, b, depth=0.7, h=0.95, top="terrazzo", front="fluted:walnut", led_kick=True, top_thick=0.04, side=1, rail=None, name="counter"):
+        """Service counter from a to b. Body extends `depth` to the LEFT of a→b (side=1) or right (side=-1): the BARISTA works on
+        that side; customers stand on the a→b line side. front: material or "fluted:<mat>", "slat:<mat>", "panel:<mat>".
+        rail: foot-rail metal ("brass", "chrome", "black_steel") along the customer face."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
         g = self._collection("Joinery")
-        # plinth (recessed) + body + top with overhang on the customer side
+        self._runs.append({"a": a, "b": b, "n": (nx, ny), "u": (ux, uy), "L": L, "depth": depth, "h": h, "front": (-nx, -ny), "line": a, "name": name, "ang": ang, "items": []})
         self.box(f"{name}_plinth", (L, depth - 0.1, 0.1), (cx, cy, 0.05), ang, self.M("black"), g)
-        self.box(f"{name}_body", (L, depth, h - 0.1 - top_thick), (cx, cy, 0.1 + (h - 0.1 - top_thick) / 2), ang, self.M(front), g)
-        self.box(f"{name}_top", (L + 0.04, depth + 0.08, top_thick), (cx - nx * 0.03, cy - ny * 0.03, h - top_thick / 2), ang, self.M(top), g)
+        self.box(f"{name}_body", (L, depth - 0.02, h - 0.1 - top_thick), (cx, cy, 0.1 + (h - 0.1 - top_thick) / 2), ang, self.M("charcoal"), g, bevel=0)
+        # customer face at a→b line, sits just proud of the body
+        self._front(name, a, b, (-nx, -ny), -0.012 * 0 + 0.002, 0.1, h - top_thick, front, g)
+        self.box(f"{name}_top", (L + 0.04, depth + 0.08, top_thick), (cx - nx * 0.03, cy - ny * 0.03, h - top_thick / 2), ang, self.M(top), g, bevel=0.006)
+        if rail:
+            ox, oy = -nx * 0.09, -ny * 0.09
+            p0 = (a[0] + ox, a[1] + oy); p1 = (b[0] + ox, b[1] + oy)
+            self.rod(f"{name}_rail", (p0[0], p0[1], 0.2), (p1[0], p1[1], 0.2), 0.019, self.M(rail), 14, g)
+            for i in range(max(2, int(L / 1.1) + 1)):
+                t_ = i / max(1, max(2, int(L / 1.1) + 1) - 1)
+                x_, y_ = p0[0] + (p1[0] - p0[0]) * t_, p0[1] + (p1[1] - p0[1]) * t_
+                self.cyl(f"{name}_railpost", 0.012, 0.2, (x_, y_, 0.0), self.M(rail), 10, coll=g)
         if led_kick:
-            # warm LED in the plinth recess, washing the floor along the customer face
-            fx, fy = cx - nx * (depth / 2 - 0.025), cy - ny * (depth / 2 - 0.025)
-            self.box(f"{name}_led", (L - 0.1, 0.015, 0.012), (fx, fy, 0.085), ang, self.M("led"), g)
+            fx, fy = cx - nx * (depth / 2 - 0.05), cy - ny * (depth / 2 - 0.05)
+            self.box(f"{name}_led", (L - 0.1, 0.012, 0.01), (fx, fy, 0.09), ang, self.M("led"), g, bevel=0)
         return (cx, cy, h, ang)
 
     def back_bar(self, a, b, depth=0.6, h=0.92, shelves=3, shelf_z=(1.55, 1.95, 2.35), cups=True, led=True, splash="terrazzo", body="walnut", top="terrazzo", side=1, name="backbar"):
@@ -674,6 +1187,7 @@ class Kit:
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         g = self._collection("Joinery")
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
+        self._runs.append({"a": a, "b": b, "n": (nx, ny), "u": (ux, uy), "L": L, "depth": depth, "h": h, "front": (nx, ny), "line": a, "name": name, "ang": ang, "items": []})
         self.box(f"{name}_body", (L, depth, h - 0.04), (cx, cy, (h - 0.04) / 2), ang, self.M(body), g)
         self.box(f"{name}_top", (L, depth + 0.02, 0.04), (cx, cy, h - 0.02), ang, self.M(top), g)
         # splashback up to the first shelf, flush with the wall face (at a→b line)
@@ -691,21 +1205,43 @@ class Kit:
                 self.cup_row(a, b, z + 0.0175, offset=sd / 2, side=side, name=f"{name}_cups{i}")
         return (cx, cy, h, ang)
 
-    def cup_row(self, a, b, z, offset=0.15, spacing=0.125, side=1, name="cups", margin=0.1, rows=1, row_gap=0.1):
-        """Rows of takeaway cups along a→b at height z (one mesh for speed)."""
+    def cup_row(self, a, b, z, offset=0.15, spacing=0.125, side=1, name="cups", margin=0.1, rows=1, row_gap=0.1, kind="mug"):
+        """Rows of real hollow cups along a→b at height z (one mesh). kind: "mug" (with handle) | "tumbler" | "takeaway"."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         bm = bmesh.new()
         n = int((L - 2 * margin) / spacing)
+        prof = {"mug": [(0, 0), (0.03, 0), (0.038, 0.006), (0.042, 0.04), (0.043, 0.085), (0.04, 0.085), (0.038, 0.012), (0, 0.01)],
+                "tumbler": [(0, 0), (0.033, 0), (0.038, 0.1), (0.035, 0.1), (0.031, 0.006), (0, 0.004)],
+                "takeaway": [(0, 0), (0.03, 0), (0.042, 0.11), (0.0455, 0.112), (0.0455, 0.122), (0.039, 0.128), (0.012, 0.13), (0, 0.13)]}[kind]
         for r in range(rows):
             off = offset + r * row_gap
             for i in range(n + 1):
                 u = margin + i * spacing
                 x, y = a[0] + ux * u + nx * off, a[1] + uy * u + ny * off
-                res = bmesh.ops.create_cone(bm, cap_ends=True, segments=12, radius1=0.034, radius2=0.045, depth=0.13)
-                bmesh.ops.translate(bm, verts=res["verts"], vec=(x, y, z + 0.065))
-                res2 = bmesh.ops.create_cone(bm, cap_ends=False, segments=12, radius1=0.041, radius2=0.0465, depth=0.05)
-                bmesh.ops.translate(bm, verts=res2["verts"], vec=(x, y, z + 0.065))
-        bm.normal_update()
+                lathe_into(bm, prof, (x, y, z), seg=14)
+                if kind == "mug":
+                    # handle as a short arc of a small swept loop pointing into the room with slight variety
+                    ha = math.atan2(ny, nx) + self.rng.uniform(-0.5, 0.5)
+                    hx, hy = math.cos(ha), math.sin(ha)
+                    px, py = -hy, hx
+                    ring = []
+                    for t in range(6):
+                        th = math.pi * t / 5 - math.pi / 2
+                        cx_ = 0.043 + math.cos(th) * 0.018
+                        cz = 0.045 + math.sin(th) * 0.024
+                        loop = []
+                        for k in range(5):
+                            a5 = 2 * math.pi * k / 5
+                            rr = cx_ + math.cos(a5) * math.cos(th) * 0.0045
+                            zz = cz + math.cos(a5) * math.sin(th) * 0.0045
+                            ss = math.sin(a5) * 0.0045
+                            loop.append(bm.verts.new((x + hx * rr + px * ss, y + hy * rr + py * ss, z + zz)))
+                        ring.append(loop)
+                    for t in range(5):
+                        for k in range(5):
+                            bm.faces.new((ring[t][k], ring[t][(k + 1) % 5], ring[t + 1][(k + 1) % 5], ring[t + 1][k]))
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        crisp_smooth(bm, 55.0)
         project_uvs(bm)
         mesh = bpy.data.meshes.new(name)
         bm.to_mesh(mesh)
@@ -715,47 +1251,42 @@ class Kit:
         self._collection("Props").objects.link(o)
         return o
 
-    def espresso_station(self, at, rot=0.0, on=0.95, machine_w=1.0, grinders=2, name="espresso"):
+    def espresso_station(self, at, rot=0.0, on=0.95, machine_w=1.0, grinders=2, variant=None, name="espresso"):
         """Espresso machine + grinders on a counter top at `at` (plan point, centre of the machine),
         facing `rot` (degrees; the barista side is behind)."""
         g = self._collection("Equipment")
         r = math.radians(rot)
         def P(dx, dy, dz=0.0):
             return (at[0] + dx * math.cos(r) - dy * math.sin(r), at[1] + dx * math.sin(r) + dy * math.cos(r), on + dz)
-        # real authored espresso machine from the library; parametric fallback if missing
-        if self.place("espresso", at, rot=rot, z=on, coll=g, name=f"{name}_machine") is not None:
-            half_w = 0.36  # real machine half-width
-            ca = P(-0.22, 0.05, 0.0); cb = P(0.22, 0.05, 0.0)
-            self.cup_row((ca[0], ca[1]), (cb[0], cb[1]), on + 0.32, offset=0.0, spacing=0.1, margin=0.0, name=f"{name}_cups")
+        self._occupied.append((at[0], at[1], 0.6))
+        if self.place("espresso", at, rot=rot, z=on, coll=g, name=f"{name}_machine", variant=variant) is not None:
+            it = self.pick_asset("espresso", variant=variant)
+            half_w = it["footprint"][0] / 2
+            ca = P(-half_w + 0.1, 0.1, 0.0); cb = P(half_w - 0.1, 0.1, 0.0)
+            self.cup_row((ca[0], ca[1]), (cb[0], cb[1]), on + it["height"] - 0.012, offset=0.0, spacing=0.095, margin=0.0, name=f"{name}_cups")
         else:
             half_w = machine_w / 2
             self.box(f"{name}_body", (machine_w, 0.56, 0.42), P(0, 0, 0.21), rot, self.M("matte_black"), g)
-            self.box(f"{name}_top", (machine_w, 0.56, 0.03), P(0, 0, 0.435), rot, self.M("steel"), g)
-            self.box(f"{name}_rail", (machine_w, 0.02, 0.05), P(0, 0.27, 0.47), rot, self.M("steel"), g)
-            for k in range(3):
-                dx = -machine_w / 2 + machine_w * (k + 1) / 4
-                self.cyl(f"{name}_group", 0.045, 0.1, P(dx, -0.2, 0.17), self.M("steel"), 16, coll=g)
-                self.box(f"{name}_handle", (0.02, 0.16, 0.02), P(dx, -0.3, 0.16), rot, self.M("walnut"), g)
-            self.cyl(f"{name}_wand", 0.008, 0.3, P(machine_w / 2 + 0.03, -0.1, 0.1), self.M("steel"), 10, rot=(0, 25, 0), coll=g)
-            self.box(f"{name}_badge", (0.14, 0.01, 0.06), P(0, -0.285, 0.3), rot, self.M("brass"), g)
-            a = P(-machine_w / 2 + 0.08, 0.1, 0.45); b = P(machine_w / 2 - 0.08, 0.1, 0.45)
-            self.cup_row((a[0], a[1]), (b[0], b[1]), on + 0.45, offset=0.0, spacing=0.095, margin=0.0, name=f"{name}_cups")
         for k in range(grinders):
-            gx = half_w + 0.22 + k * 0.3
-            self.box(f"{name}_grinder{k}", (0.22, 0.3, 0.3), P(gx, -0.05, 0.15), rot, self.M("matte_black"), g)
-            self.cyl(f"{name}_hopper{k}", 0.08, 0.2, P(gx, -0.02, 0.3), self.M("dark_glass"), 18, coll=g)
-            self.cyl(f"{name}_ring{k}", 0.085, 0.015, P(gx, -0.02, 0.295), self.M("copper"), 18, coll=g)
-            self.sphere(f"{name}_beans{k}", 0.06, P(gx, -0.02, 0.42), self.M("beans"), (1, 1, 0.5), coll=g)
+            gx = half_w + 0.17 + k * 0.27
+            gp = P(gx, 0.03, 0.0)
+            self._occupied.append((gp[0], gp[1], 0.16))
+            if self.place("grinder", (gp[0], gp[1]), rot=rot, z=on, coll=g, name=f"{name}_grinder{k}") is None:
+                self.box(f"{name}_grinder{k}", (0.22, 0.3, 0.3), P(gx, -0.05, 0.15), rot, self.M("matte_black"), g)
+        self._has_grinders = True
         return g
 
-    def display_case(self, at, rot=0.0, w=1.3, d=0.75, on=0.0, h_base=0.9, glass_h=0.55, pastries=True, name="display"):
+    def display_case(self, at, rot=0.0, w=1.3, d=0.75, on=0.0, h_base=0.9, glass_h=0.55, pastries=True, body="walnut_slat", top="terrazzo", name="display"):
         """Pastry / grab-and-go display: cabinet base + glass top with lit shelves and food inside."""
         g = self._collection("Equipment")
         r = math.radians(rot)
         def P(dx, dy, dz=0.0):
             return (at[0] + dx * math.cos(r) - dy * math.sin(r), at[1] + dx * math.sin(r) + dy * math.cos(r), on + dz)
-        self.box(f"{name}_base", (w, d, h_base - 0.04), P(0, 0, (h_base - 0.04) / 2), rot, self.M("walnut_slat"), g)
-        self.box(f"{name}_top", (w + 0.04, d + 0.04, 0.04), P(0, 0, h_base - 0.02), rot, self.M("terrazzo"), g)
+        self.box(f"{name}_base", (w, d, h_base - 0.04), P(0, 0, (h_base - 0.04) / 2), rot, self.M(body), g)
+        self.box(f"{name}_top", (w + 0.04, d + 0.04, 0.04), P(0, 0, h_base - 0.02), rot, self.M(top), g, bevel=0.006)
+        for sx in (-1, 1):   # slim steel uprights + pass-through rails
+            for sy in (-1, 1):
+                self.box(f"{name}_post", (0.016, 0.016, glass_h), P(sx * (w / 2 - 0.006), sy * (d / 2 - 0.006), h_base + glass_h / 2), rot, self.M("black_steel"), g, bevel=0)
         self.box(f"{name}_glass", (w, d, glass_h), P(0, 0, h_base + glass_h / 2), rot, self.M("display_glass"), g)
         self.box(f"{name}_lid", (w + 0.02, d + 0.02, 0.03), P(0, 0, h_base + glass_h + 0.015), rot, self.M("black_steel"), g)
         self.box(f"{name}_led", (w - 0.1, 0.02, 0.01), P(0, d / 2 - 0.04, h_base + glass_h - 0.03), rot, self.M("led_cool"), g)
@@ -792,23 +1323,42 @@ class Kit:
         return g
 
     def till(self, at, rot=0.0, on=0.95, name="till"):
+        """Point-of-sale terminal on a counter. The screen faces (sin rot, -cos rot), so aim rot at the barista."""
         g = self._collection("Equipment")
-        r = math.radians(rot)
-        def P(dx, dy, dz=0.0):
-            return (at[0] + dx * math.cos(r) - dy * math.sin(r), at[1] + dx * math.sin(r) + dy * math.cos(r), on + dz)
-        self.box(f"{name}_base", (0.22, 0.18, 0.03), P(0, 0, 0.015), rot, self.M("oak"), g)
-        self.box(f"{name}_arm", (0.04, 0.04, 0.2), P(0, 0.04, 0.12), rot, self.M("steel"), g)
-        self.box(f"{name}_screen", (0.32, 0.02, 0.22), P(0, 0.0, 0.3), rot + 180, self.M("screen"), g)
-        self.box(f"{name}_reader", (0.09, 0.09, 0.05), P(0.2, -0.05, 0.025), rot, self.M("enamel_sage"), g)
+        self._occupied.append((at[0], at[1], 0.25))
+        if self.place("pos", at, rot=rot, z=on, coll=g, name=name) is None:
+            self.box(f"{name}_screen", (0.32, 0.02, 0.22), (at[0], at[1], on + 0.3), rot, self.M("screen"), g)
         return g
 
-    def menu_screen(self, at, rot=0.0, w=1.45, h=0.82, z=2.1, name="menu"):
-        """Wall-mounted menu screen; `at` on the wall face, `rot` = wall direction, screen faces left of it."""
+    def menu_screen(self, at, rot=0.0, w=1.45, h=0.82, z=2.1, name="menu", board=None):
+        """Wall-mounted lit menu board with real typeset content; `at` on the wall face, `rot` = wall direction, faces left of it."""
         g = self._collection("Equipment")
-        self.box(f"{name}_frame", (w + 0.04, 0.05, h + 0.04), (at[0], at[1], z), rot, self.M("black"), g)
         r = math.radians(rot)
-        self.box(f"{name}_panel", (w, 0.02, h), (at[0] - math.sin(r) * 0.03, at[1] + math.cos(r) * 0.03, z), rot, self.M("menu_glow"), g)
+        board = self.rng.randrange(3) if board is None else board
+        self.box(f"{name}_frame", (w + 0.04, 0.05, h + 0.04), (at[0] - math.sin(r) * 0.025, at[1] + math.cos(r) * 0.025, z), rot, self.M("black"), g)
+        m = self.mat_image(f"menu_{board}", os.path.join(self.tex or "", "menu", f"menu_{board}.jpg"), roughness=0.25, emit=0.35)
+        self._picture(f"{name}_panel", (at[0] - math.sin(r) * 0.052, at[1] + math.cos(r) * 0.052), rot, z, w, h, m, g)
         return g
+
+    def _picture(self, name, at, rot, z, w, h, mat, g):
+        """A rectangle with 0..1 UVs, facing the left of `rot` (images read correctly from the room)."""
+        r = math.radians(rot)
+        ux, uy = math.cos(r), math.sin(r)
+        bm = bmesh.new()
+        # reading left→right from the room means travelling against `rot`
+        p = [(ux * w / 2, uy * w / 2, -h / 2), (-ux * w / 2, -uy * w / 2, -h / 2), (-ux * w / 2, -uy * w / 2, h / 2), (ux * w / 2, uy * w / 2, h / 2)]
+        vs = [bm.verts.new(v) for v in p]
+        f = bm.faces.new(vs)
+        uv = bm.loops.layers.uv.verify()
+        for l, c in zip(f.loops, ((0, 0), (1, 0), (1, 1), (0, 1))):
+            l[uv].uv = c
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me); bm.free()
+        o = bpy.data.objects.new(name, me)
+        o.data.materials.append(mat)
+        o.location = (at[0], at[1], z)
+        g.objects.link(o)
+        return o
 
     def kiosk(self, at, rot=0.0, name="kiosk"):
         """Self-order kiosk: walnut panel with a flush screen (at = point on the wall face)."""
@@ -872,12 +1422,24 @@ class Kit:
         return g
 
     # ---------------- seating ----------------
-    def chair(self, at, rot=0.0, seat_mat="boucle", frame="oak", name="chair"):
+    def _outdoor_chair(self):
+        """Weatherproof pick for terrace seating (never upholstered), one model per café."""
+        if not hasattr(self, "_outdoor_variant"):
+            names = ["metal_black", "metal_olive", "metal_mustard", "bentwood_black"]
+            items = [i for i in self.manifest.get("chair", []) if i["variant"] in names]
+            tagged = [i for i in items if self.style in i.get("style_tags", [])]
+            pool = tagged or items
+            self._outdoor_variant = self.rng.choice(pool)["variant"] if pool else None
+        return self._outdoor_variant
+
+    def chair(self, at, rot=0.0, seat_mat="boucle", frame="oak", name="chair", variant=None):
         """Café chair at `at`. It faces the direction (sin rot, -cos rot): rot=0 faces south (-y),
         90 faces east (+x), 180 faces north (+y), -90 faces west (-x). Uses a curated real model from
         the asset library when one exists for category 'chair'; otherwise builds the parametric chair."""
         g = self._collection("Seating")
-        if self.place("chair", at, rot=rot, coll=g, name=name) is not None:
+        if variant is None and (self._room_at(at[0], at[1]) or {}).get("category") == "seating_outdoor":
+            variant = self._outdoor_chair()
+        if self.place("chair", at, rot=rot, coll=g, name=name, variant=variant) is not None:
             return g
         r = math.radians(rot)
         def P(dx, dy, dz=0.0):
@@ -893,59 +1455,122 @@ class Kit:
         self.box(f"{name}_slat", (0.34, 0.025, 0.05), P(0, 0.18, 0.66), rot, fm, g)
         return g
 
-    def table(self, at, shape="round", size=0.8, h=0.74, top="walnut", chairs=2, chair_r=None, name="table", seat_mat="boucle"):
-        """Table with evenly spaced chairs around it (round) or on the long sides (rect: size=(w,d))."""
+    def table(self, at, shape="round", size=0.8, h=0.74, top="walnut", chairs=2, chair_r=None, name="table", seat_mat="boucle", base="auto", edge=None, variant=None):
+        """Table with chairs. shape "round" (size = diameter) or "rect" (size=(w, d)). top: any material (marble, terrazzo, walnut, "marble_verde"...).
+        base: "pedestal" | "tulip" | "trestle" | "hairpin" | "auto". edge: metal edge band or None. variant: force a chair model."""
         g = self._collection("Seating")
+        bm_ = self.M("black_steel")
+        if base == "auto":
+            base = "tulip" if shape == "round" and self.style in ("midcentury", "modern", "scandinavian", "deco") else "pedestal" if shape == "round" else "hairpin" if self.style in ("industrial", "midcentury", "brutalist", "retro") else "trestle"
         if shape == "round":
             r = size / 2
-            self.cyl(f"{name}_top", r, 0.03, (at[0], at[1], h - 0.03), self.M(top), 40, coll=g)
-            self.cyl(f"{name}_edge", r + 0.004, 0.012, (at[0], at[1], h - 0.03), self.M("brass"), 40, coll=g)
-            self.cyl(f"{name}_stem", 0.04, h - 0.05, (at[0], at[1], 0.02), self.M("black"), 16, coll=g)
-            self.cyl(f"{name}_base", 0.26, 0.02, (at[0], at[1], 0), self.M("black"), 32, coll=g)
-            cr = chair_r or (r + 0.33)
+            self.lathe(f"{name}_top", [(0, h - 0.028), (r - 0.012, h - 0.028), (r, h - 0.018), (r, h - 0.006), (r - 0.006, h), (0, h)], (at[0], at[1], 0), self.M(top), 56, g)
+            if edge:
+                self.cyl(f"{name}_edge", r + 0.002, 0.012, (at[0], at[1], h - 0.022), self.M(edge), 56, coll=g)
+            if base == "tulip":
+                self.lathe(f"{name}_base", [(0, 0), (0.24, 0), (0.25, 0.006), (0.2, 0.02), (0.06, 0.06), (0.034, 0.2), (0.034, h - 0.16), (0.075, h - 0.03), (0, h - 0.03)], (at[0], at[1], 0), self.M(self.style_base()), 48, g)
+            else:
+                self.lathe(f"{name}_base", [(0, 0), (0.25, 0), (0.25, 0.012), (0.16, 0.022), (0.035, 0.05), (0.03, 0.2), (0.03, h - 0.1), (0.05, h - 0.06), (0.1, h - 0.04), (0.1, h - 0.03), (0, h - 0.03)], (at[0], at[1], 0), bm_, 40, g)
+            cr = chair_r or (r + 0.3)
             for i in range(chairs):
                 a = 2 * math.pi * i / chairs + math.pi / 2
                 cx, cy = at[0] + math.cos(a) * cr, at[1] + math.sin(a) * cr
-                # chair() faces local -y rotated by rot: facing (sin rot, -cos rot) = toward the centre
-                self.chair((cx, cy), math.degrees(a) - 90, seat_mat=seat_mat, name=f"{name}_chair{i}")
+                self.chair((cx, cy), math.degrees(a) - 90, seat_mat=seat_mat, name=f"{name}_chair{i}", variant=variant)
         else:
             w, d = size if isinstance(size, (tuple, list)) else (size, size * 0.6)
-            self.box(f"{name}_top", (w, d, 0.03), (at[0], at[1], h - 0.015), 0, self.M(top), g)
-            self.box(f"{name}_edge", (w + 0.008, d + 0.008, 0.012), (at[0], at[1], h - 0.03), 0, self.M("brass"), g)
-            for sx, sy in ((-w / 2 + 0.06, -d / 2 + 0.06), (w / 2 - 0.06, -d / 2 + 0.06), (-w / 2 + 0.06, d / 2 - 0.06), (w / 2 - 0.06, d / 2 - 0.06)):
-                self.box(f"{name}_leg", (0.04, 0.04, h - 0.03), (at[0] + sx, at[1] + sy, (h - 0.03) / 2), 0, self.M("black"), g)
+            self.box(f"{name}_top", (w, d, 0.03), (at[0], at[1], h - 0.015), 0, self.M(top), g, bevel=0.006)
+            if edge:
+                self.box(f"{name}_edge", (w + 0.006, d + 0.006, 0.012), (at[0], at[1], h - 0.022), 0, self.M(edge), g, bevel=0)
+            if base == "trestle":
+                for sx in (-1, 1):
+                    x = at[0] + sx * (w / 2 - 0.14)
+                    self.box(f"{name}_upright", (0.05, 0.05, h - 0.06), (x, at[1], (h - 0.06) / 2 + 0.03), 0, bm_, g)
+                    self.box(f"{name}_foot", (0.05, d - 0.1, 0.03), (x, at[1], 0.015), 0, bm_, g)
+                    self.box(f"{name}_cap", (0.05, d - 0.16, 0.03), (x, at[1], h - 0.045), 0, bm_, g)
+                self.box(f"{name}_rail", (w - 0.32, 0.03, 0.05), (at[0], at[1], h - 0.06), 0, bm_, g)
+            else:
+                for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+                    x, y = at[0] + sx * (w / 2 - 0.07), at[1] + sy * (d / 2 - 0.07)
+                    self.cyl(f"{name}_leg", 0.008, h - 0.03, (x, y, 0), bm_, 10, coll=g)
+                    self.cyl(f"{name}_leg", 0.008, h - 0.03, (x, y - sy * 0.05, 0), bm_, 10, coll=g)
             per_side = max(1, chairs // 2)
             for i in range(per_side):
                 x = at[0] - w / 2 + w * (i + 0.5) / per_side
-                self.chair((x, at[1] - d / 2 - 0.3), 180, seat_mat=seat_mat, name=f"{name}_chair_s{i}")   # south side faces north
-                self.chair((x, at[1] + d / 2 + 0.3), 0, seat_mat=seat_mat, name=f"{name}_chair_n{i}")     # north side faces south
+                self.chair((x, at[1] - d / 2 - 0.26), 180, seat_mat=seat_mat, name=f"{name}_chair_s{i}", variant=variant)
+                self.chair((x, at[1] + d / 2 + 0.26), 0, seat_mat=seat_mat, name=f"{name}_chair_n{i}", variant=variant)
         return g
 
-    def stool(self, at, h=0.75, name="stool"):
+    def style_base(self):
+        return {"deco": "brass", "midcentury": "white", "modern": "white", "scandinavian": "white"}.get(self.style, "black_steel")
+
+    def lathe(self, name, profile, loc, mat, segments=32, coll=None):
+        """Lathed (revolved) solid from a (radius, z) profile, smooth shaded. Use for vases, tabletops, bases, bottles."""
+        bm = bmesh.new()
+        lathe_into(bm, profile, (0, 0, 0), seg=segments)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        crisp_smooth(bm, 40.0)
+        project_uvs(bm)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me); bm.free()
+        o = bpy.data.objects.new(name, me)
+        o.location = loc
+        if mat:
+            o.data.materials.append(mat)
+        (coll or self.coll).objects.link(o)
+        return o
+
+    def lounge_group(self, at, rot=0.0, chairs=2, table_top="marble", variant=None, rug=None, name="lounge"):
+        """Conversation group: upholstered tub chairs around a low table, on an optional rug colour."""
         g = self._collection("Seating")
-        if self.place("stool", at, rot=0, coll=g, name=name) is not None:
+        if rug:
+            self.rug(at, w=2.4, d=2.0, mat=rug, name=f"{name}_rug")
+        h = 0.42
+        self.lathe(f"{name}_table", [(0, 0), (0.2, 0), (0.2, 0.01), (0.03, 0.04), (0.03, h - 0.04), (0.3, h - 0.03), (0.32, h - 0.018), (0.32, h - 0.006), (0.31, h), (0, h)], (at[0], at[1], 0), self.M(table_top), 48, g)
+        for i in range(chairs):
+            a = math.radians(rot) + 2 * math.pi * i / chairs + math.pi / 2
+            cx, cy = at[0] + math.cos(a) * 0.72, at[1] + math.sin(a) * 0.72
+            self.place("lounge", (cx, cy), rot=math.degrees(a) - 90, coll=g, name=f"{name}_chair{i}", variant=variant)
+        return g
+
+    def stool(self, at, h=0.75, name="stool", variant=None):
+        g = self._collection("Seating")
+        if self.place("stool", at, rot=self.rng.uniform(-8, 8), coll=g, name=name, variant=variant) is not None:
             return g
         self.cyl(f"{name}_seat", 0.17, 0.05, (at[0], at[1], h - 0.05), self.M("leather"), 20, coll=g)
         self.cyl(f"{name}_stem", 0.025, h - 0.07, (at[0], at[1], 0.02), self.M("black"), 12, coll=g)
         self.cyl(f"{name}_base", 0.2, 0.02, (at[0], at[1], 0), self.M("black"), 24, coll=g)
-        self.cyl(f"{name}_ring", 0.17, 0.015, (at[0], at[1], 0.25), self.M("brass"), 24, coll=g)
         return g
 
-    def banquette(self, a, b, depth=0.6, seat_h=0.46, back_h=1.05, panel_h=2.2, side=1, seat_mat="boucle", name="banquette"):
-        """Fixed bench along a wall from a to b: plinth, seat, channel-tufted back, slatted wall panel above."""
+    def banquette(self, a, b, depth=0.6, seat_h=0.46, back_h=1.05, panel_h=2.2, side=1, seat_mat="boucle", panel="walnut_slat", cushions="channel", name="banquette"):
+        """Fixed upholstered bench along a wall a→b: plinth, plump seat, tufted back cushions, panel above (panel=None to show the wall).
+        cushions: "channel" (vertical channels) | "tufted" (square tufts) | "roll" (one long bolster). seat_mat: any fabric, e.g. "velvet:#46624f"."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         g = self._collection("Seating")
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
-        self.box(f"{name}_plinth", (L, depth - 0.1, 0.12), (cx, cy, 0.06), ang, self.M("black"), g)
-        self.box(f"{name}_seat", (L, depth, seat_h - 0.12), (cx, cy, 0.12 + (seat_h - 0.12) / 2), ang, self.M(seat_mat), g)
-        bx, by = (a[0] + b[0]) / 2 + nx * 0.09, (a[1] + b[1]) / 2 + ny * 0.09
-        n = max(1, int(L / 0.45))
-        for i in range(n):
-            u = L * (i + 0.5) / n
-            self.box(f"{name}_tuft", (L / n - 0.03, 0.16, back_h - seat_h), (a[0] + ux * u + nx * 0.09, a[1] + uy * u + ny * 0.09, seat_h + (back_h - seat_h) / 2), ang, self.M(seat_mat), g)
+        fab = self.M(seat_mat)
+        self.box(f"{name}_plinth", (L, depth - 0.08, 0.12), (cx - nx * 0.03, cy - ny * 0.03, 0.06), ang, self.M("black"), g)
+        self.box(f"{name}_base", (L, depth, 0.12), (cx, cy, 0.18), ang, fab, g, bevel=0.012)
+        seats = max(1, int(L / 1.1))
+        for i in range(seats):
+            u = L * (i + 0.5) / seats
+            self.box(f"{name}_seat", (L / seats - 0.012, depth - 0.02, seat_h - 0.24), (a[0] + ux * u + nx * depth / 2, a[1] + uy * u + ny * depth / 2, 0.24 + (seat_h - 0.24) / 2), ang, fab, g, bevel=0.04)
+        bh = back_h - seat_h
+        if cushions == "roll":
+            self.rod(f"{name}_bolster", (a[0] + ux * 0.02 + nx * 0.2, a[1] + uy * 0.02 + ny * 0.2, seat_h + 0.11), (b[0] - ux * 0.02 + nx * 0.2, b[1] - uy * 0.02 + ny * 0.2, seat_h + 0.11), 0.09, fab, 24, g)
+            self.box(f"{name}_back", (L, 0.1, bh), (a[0] * 0.5 + b[0] * 0.5 + nx * 0.05, a[1] * 0.5 + b[1] * 0.5 + ny * 0.05, seat_h + bh / 2), ang, fab, g, bevel=0.03)
+        else:
+            pitch = 0.2 if cushions == "channel" else 0.4
+            n = max(1, int(L / pitch))
+            for i in range(n):
+                u = L * (i + 0.5) / n
+                rows = 1 if cushions == "channel" else 2
+                for j in range(rows):
+                    hh = bh / rows
+                    self.box(f"{name}_tuft", (L / n - 0.008, 0.13, hh - 0.008), (a[0] + ux * u + nx * 0.075, a[1] + uy * u + ny * 0.075, seat_h + hh * (j + 0.5)), ang, fab, g, bevel=min(0.045, (L / n) * 0.3))
         px, py = (a[0] + b[0]) / 2 + nx * 0.025, (a[1] + b[1]) / 2 + ny * 0.025
-        self.box(f"{name}_panel", (L, 0.04, panel_h - back_h), (px, py, back_h + (panel_h - back_h) / 2), ang, self.M("walnut_slat"), g)
-        self.box(f"{name}_cove", (L - 0.1, 0.02, 0.01), (px + nx * 0.03, py + ny * 0.03, panel_h - 0.02), ang, self.M("led"), g)
+        if panel:
+            self.box(f"{name}_panel", (L, 0.04, panel_h - back_h), (px, py, back_h + (panel_h - back_h) / 2), ang, self.M(panel), g)
+            self.box(f"{name}_cove", (L - 0.1, 0.012, 0.008), (px + nx * 0.03, py + ny * 0.03, panel_h - 0.02), ang, self.M("led"), g, bevel=0)
         return g
 
     # ---------------- interior design layer: walls, ceilings, styling ----------------
@@ -1107,23 +1732,22 @@ class Kit:
                 u += 0.19
             else:
                 self.cyl(f"{name}_pot", 0.05, 0.08, (x, y, z + 0.015), self.M("pot"), 14, coll=g)
-                for j in range(4):
-                    self.sphere(f"{name}_leaf", 0.045, (x + self.rng.uniform(-0.04, 0.04), y + self.rng.uniform(-0.04, 0.04), z + 0.13 + self.rng.uniform(0, 0.05)), self.M("greens"), (1.3, 1.0, 0.7), coll=g)
+                self._leaf_cloud(f"{name}_leaf", (x, y, z + 0.17), (0.09, 0.08, 0.09), 90, 0.05, coll=g)
                 u += 0.18
             k += 1
         return g
 
     def hanging_plants(self, a, b, z, n=3, name="hang"):
-        """Trailing plants hung from the ceiling along a→b."""
+        """Trailing plants in hung pots along a→b; z = ceiling height underside."""
         g = self._collection("Props")
         (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
         for i in range(n):
             u = L * (i + 0.5) / n
             x, y = a[0] + ux * u, a[1] + uy * u
-            self.cyl(f"{name}_cord", 0.003, 0.6, (x, y, z - 0.6), self.M("black"), 6, coll=g)
-            self.cyl(f"{name}_pot", 0.1, 0.12, (x, y, z - 0.72), self.M("pot"), 16, r_top=0.12, coll=g)
-            for j in range(5):
-                self.sphere(f"{name}_leaf", 0.07, (x + self.rng.uniform(-0.1, 0.1), y + self.rng.uniform(-0.1, 0.1), z - 0.62 - self.rng.uniform(0, 0.25)), self.M("greens"), (1.2, 1.0, 0.6), coll=g)
+            self.cyl(f"{name}_cord", 0.002, 0.6, (x, y, z - 0.6), self.M("black"), 6, coll=g)
+            self.lathe(f"{name}_pot", [(0, 0), (0.07, 0), (0.115, 0.13), (0.125, 0.14), (0.118, 0.14), (0, 0.11)], (x, y, z - 0.75), self.M("pot"), 24, g)
+            self._leaf_cloud(f"{name}_leaf", (x, y, z - 0.68), (0.2, 0.2, 0.13), 240, 0.08, coll=g)
+            self._leaf_cloud(f"{name}_trail", (x, y, z - 1.0), (0.22, 0.22, 0.32), 220, 0.07, coll=g, droop=1.2)
         return g
 
     def mirror(self, at, rot=0.0, z=1.5, w=1.2, h=1.6, name="mirror"):
@@ -1160,26 +1784,19 @@ class Kit:
         self.box(f"{name}_top", (0.92, 0.47, 0.03), (at[0], at[1], 1.015), rot, self.M("black_steel"), g)
         return g
 
-    def planter_hedge(self, a, b, w=0.4, h=0.45, hedge_h=0.5, name="hedge"):
-        """Street-edge planter run with a clipped hedge (one mesh for the hedge)."""
+    def planter_hedge(self, a, b, w=0.4, h=0.45, hedge_h=0.5, name="hedge", planter="pot"):
+        """Street-edge planter: a real trough with soil and a clipped hedge made of leaf cards."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
         g = self._collection("Props")
-        self.box(f"{name}_planter", (L, w, h), ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, h / 2), ang, self.M("pot"), g)
-        bm = bmesh.new()
-        n = max(2, int(L / 0.35))
+        mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+        self.box(f"{name}_planter", (L, w, h), (mx, my, h / 2), ang, self.M(planter), g, bevel=0.012)
+        self.box(f"{name}_soil", (L - 0.05, w - 0.05, 0.01), (mx, my, h + 0.002), ang, self.M("soil"), g, bevel=0)
+        n = max(1, int(L / 0.32))
+        horiz = abs(ux) > abs(uy)
+        rl, rw = 0.34, w * 0.6
         for i in range(n):
             u = L * (i + 0.5) / n
-            res = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=1.0)
-            bmesh.ops.scale(bm, vec=(0.24, w * 0.45, hedge_h * 0.5), verts=res["verts"])
-            bmesh.ops.translate(bm, verts=res["verts"], vec=(a[0] + ux * u, a[1] + uy * u, h + hedge_h * 0.35))
-        bm.normal_update()
-        project_uvs(bm)
-        mesh = bpy.data.meshes.new(name)
-        bm.to_mesh(mesh)
-        bm.free()
-        o = bpy.data.objects.new(name, mesh)
-        o.data.materials.append(self.M("greens"))
-        g.objects.link(o)
+            self._leaf_cloud(f"{name}_leaf", (a[0] + ux * u, a[1] + uy * u, h + hedge_h * 0.5), (rl if horiz else rw, rw if horiz else rl, hedge_h * 0.6), 420, 0.045, ("leaf_a", "leaf_b", "leaf_dark"), g, core="leaf_dark", core_k=0.62)
         return g
 
     def string_lights(self, a, b, z, n=12, sag=0.25, name="festoon"):
@@ -1223,21 +1840,52 @@ class Kit:
         return g
 
     # ---------------- lighting & décor ----------------
-    def pendant(self, at, z_ceiling, drop=0.9, r=0.16, style="opal", power=38.0, name="pendant"):
-        """Pendant lamp hung from the ceiling at `at`; style opal (glowing dome) or brass (metal shade)."""
+    def pendant(self, at, z_ceiling, drop=0.9, r=0.16, style="auto", power=55.0, name="pendant", variant=None):
+        """Pendant lamp hung from the ceiling at `at`, shade bottom at z_ceiling - drop. Real library fixtures: variant "dome_black",
+        "dome_brass", "dome_sage", "globe_brass", "globe_black", "rattan", "fluted", or auto from the design style."""
+        g = self._collection("Lighting")
+        legacy = {"opal": "globe_brass", "brass": "dome_brass"}
+        variant = variant or legacy.get(style)
+        z = z_ceiling - drop
+        it = self.pick_asset("pendant", variant=variant)
+        if it:
+            self.place("pendant", at, rot=0, z=z, coll=g, name=name, variant=it["variant"])
+            top = z + it["height"]
+            lz = z + it["height"] * 0.35
+        else:
+            self.sphere(f"{name}_dome", r, (at[0], at[1], z), self.M("opal"), (1, 1, 0.75), coll=g)
+            top = z + r
+            lz = z
+        self.cyl(f"{name}_rose", 0.05, 0.018, (at[0], at[1], z_ceiling - 0.018), self.M("brass"), 24, coll=g)
+        self.cyl(f"{name}_cord", 0.0035, max(0.02, z_ceiling - top), (at[0], at[1], top), self.M("black"), 8, coll=g)
+        d = bpy.data.lights.new(name, "POINT")
+        d.energy = power; d.color = kelvin_to_rgb(2700); d.shadow_soft_size = 0.1
+        o = bpy.data.objects.new(name, d)
+        o.location = (at[0], at[1], lz)
+        g.objects.link(o)
+        return g
+
+    def pendant_cluster(self, at, z_ceiling, n=5, spread=0.5, name="cluster", variant=None, power=22.0):
+        """Staggered group of pendants at different drops: a feature over a table, stair or the bar end."""
+        for i in range(n):
+            a = 2.399 * i
+            rr = spread * math.sqrt((i + 0.4) / n)
+            self.pendant((at[0] + math.cos(a) * rr, at[1] + math.sin(a) * rr), z_ceiling, drop=0.7 + 0.55 * ((i * 0.618) % 1.0), name=f"{name}{i}", variant=variant, power=power)
+
+    def pendant_linear(self, at, z_ceiling, rot=0.0, drop=1.0, power=60.0, name="linear", variant=None):
+        """Long bar pendant over a counter or communal table; rot = direction of the bar."""
         g = self._collection("Lighting")
         z = z_ceiling - drop
-        self.cyl(f"{name}_rose", 0.05, 0.02, (at[0], at[1], z_ceiling - 0.02), self.M("brass"), 16, coll=g)
-        self.cyl(f"{name}_cord", 0.004, drop - 0.1, (at[0], at[1], z + 0.08), self.M("black"), 6, coll=g)
-        if style == "opal":
-            self.sphere(f"{name}_dome", r, (at[0], at[1], z), self.M("opal"), (1, 1, 0.75), coll=g)
-        else:
-            self.cyl(f"{name}_shade", r * 0.5, 0.22, (at[0], at[1], z - 0.1), self.M("brass"), 24, r_top=r, coll=g)
-            self.cyl(f"{name}_bulb", 0.03, 0.05, (at[0], at[1], z - 0.12), self.M("opal"), 12, coll=g)
-        d = bpy.data.lights.new(name, "POINT")
-        d.energy = power; d.color = kelvin_to_rgb(2700); d.shadow_soft_size = 0.12
+        self.place("pendant_linear", at, rot=rot, z=z, coll=g, name=name, variant=variant)
+        r = math.radians(rot)
+        for sd in (-0.5, 0.5):
+            x, y = at[0] + math.cos(r) * sd, at[1] + math.sin(r) * sd
+            self.cyl(f"{name}_cable", 0.002, drop - 0.05, (x, y, z + 0.05), self.M("black"), 6, coll=g)
+        d = bpy.data.lights.new(name, "AREA")
+        d.shape = "RECTANGLE"; d.size = 1.3; d.size_y = 0.06; d.energy = power; d.color = kelvin_to_rgb(3000)
         o = bpy.data.objects.new(name, d)
-        o.location = (at[0], at[1], z - 0.05)
+        o.location = (at[0], at[1], z - 0.005)
+        o.rotation_euler = (0, 0, r)
         g.objects.link(o)
         return g
 
@@ -1245,33 +1893,94 @@ class Kit:
         (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
         return self.box(name, (L, 0.02, 0.01), ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, z), ang, self.M(mat), self._collection("Lighting"))
 
-    def plant(self, at, h=1.1, pot_r=0.22, name="plant"):
+    def _leaf_cloud(self, name, center, radii, n, leaf=0.06, mats=("leaf_a", "leaf_b"), coll=None, droop=0.0, core=None, core_k=0.78):
+        """Foliage from real leaf cards (thousands of small quads in an ellipsoid), not blobs. core: material of a dark
+        inner volume so clipped hedges read as solid foliage instead of floating flakes."""
+        g = coll or self._collection("Props")
+        if core:
+            self.sphere(f"{name}_core", 1.0, center, self.M(core), (radii[0] * core_k, radii[1] * core_k, radii[2] * core_k), coll=g)
+        for mi, mname in enumerate(mats):
+            bm = bmesh.new()
+            for _ in range(n // len(mats)):
+                while True:
+                    x, y, z = (self.rng.uniform(-1, 1) for _ in range(3))
+                    if x * x + y * y + z * z <= 1:
+                        break
+                k = 0.72 + 0.28 * self.rng.random()
+                p = Vector((center[0] + x * radii[0] * k, center[1] + y * radii[1] * k, center[2] + z * radii[2] * k))
+                d = Vector((self.rng.uniform(-1, 1), self.rng.uniform(-1, 1), self.rng.uniform(-0.6, 0.3) - droop)).normalized()
+                s_ = d.cross(Vector((0.1, 0.2, 1))).normalized()
+                L_ = leaf * self.rng.uniform(0.7, 1.3)
+                W_ = L_ * 0.36
+                v0, v1 = bm.verts.new(p - d * L_ * 0.5), bm.verts.new(p + s_ * W_ * 0.5)
+                v2, v3 = bm.verts.new(p + d * L_ * 0.5), bm.verts.new(p - s_ * W_ * 0.5)
+                bm.faces.new((v0, v1, v2, v3))
+            bm.normal_update()
+            project_uvs(bm)
+            me = bpy.data.meshes.new(name)
+            bm.to_mesh(me); bm.free()
+            o = bpy.data.objects.new(f"{name}_{mi}", me)
+            o.data.materials.append(self.M(mname))
+            g.objects.link(o)
+
+    def plant(self, at, h=1.1, pot_r=0.22, name="plant", variant=None):
+        """Real potted plant from the library; picks the model closest to height h."""
         g = self._collection("Props")
         z = at[2] if len(at) > 2 else 0.0
-        if self.place("plant", (at[0], at[1]), rot=self.rng.uniform(0, 360), z=z, coll=g, name=name) is not None:
+        items = self.manifest.get("plant") or []
+        if items and not variant:
+            variant = min(items, key=lambda i: abs(i["height"] - h))["variant"]
+        if self.place("plant", (at[0], at[1]), rot=self.rng.uniform(0, 360), z=z, coll=g, name=name, variant=variant) is not None:
             return g
-        self.cyl(f"{name}_pot", pot_r * 0.85, h * 0.32, at + (0,) if len(at) == 2 else at, self.M("pot"), 20, r_top=pot_r, coll=g)
-        z0 = (at[2] if len(at) > 2 else 0) + h * 0.32
-        for k in range(12):
-            a = self.rng.random() * 6.28; d = self.rng.random() * pot_r * 0.9
-            self.sphere(f"{name}_leaf", h * 0.09 + self.rng.random() * h * 0.07, (at[0] + math.cos(a) * d, at[1] + math.sin(a) * d, z0 + h * 0.25 + self.rng.random() * h * 0.4), self.M("greens"), (1.3, 1.0, 0.6), coll=g)
+        self.lathe(f"{name}_pot", [(0, 0), (pot_r * 0.8, 0), (pot_r, h * 0.3), (pot_r * 0.92, h * 0.3), (0, h * 0.27)], (at[0], at[1], z), self.M("pot"), 28, g)
+        self._leaf_cloud(f"{name}_leaf", (at[0], at[1], z + h * 0.65), (pot_r * 1.6, pot_r * 1.6, h * 0.35), 500, 0.09, coll=g)
         return g
 
-    def olive_tree(self, at, h=2.6, name="olive"):
+    def olive_tree(self, at, h=2.6, name="olive", pot="pot"):
+        """Olive tree in a big planter: tapering branched trunk, soil, thousands of narrow silver-green leaves."""
         g = self._collection("Props")
-        self.cyl(f"{name}_pot", 0.32, 0.5, (at[0], at[1], 0), self.M("pot"), 24, r_top=0.36, coll=g)
-        self.cyl(f"{name}_trunk", 0.06, h * 0.45, (at[0], at[1], 0.5), self.M("bark"), 10, r_top=0.04, coll=g)
-        for k in range(8):
-            a = self.rng.random() * 6.28; d = self.rng.random() * h * 0.22
-            self.sphere(f"{name}_canopy", h * 0.14 + self.rng.random() * h * 0.08, (at[0] + math.cos(a) * d, at[1] + math.sin(a) * d, 0.5 + h * 0.55 + self.rng.random() * h * 0.25), self.M("olive_green"), coll=g)
+        self.lathe(f"{name}_pot", [(0, 0), (0.27, 0), (0.36, 0.5), (0.385, 0.53), (0.385, 0.56), (0.335, 0.56), (0.32, 0.5), (0, 0.5)], (at[0], at[1], 0), self.M(pot), 36, g)
+        self.cyl(f"{name}_soil", 0.33, 0.012, (at[0], at[1], 0.5), self.M("soil"), 28, coll=g)
+        self.cyl(f"{name}_trunk", 0.06, h * 0.42, (at[0], at[1], 0.5), self.M("bark"), 14, r_top=0.036, coll=g)
+        tz = 0.5 + h * 0.42
+        for k in range(6):
+            a = self.rng.random() * 6.283
+            ln = h * self.rng.uniform(0.18, 0.28)
+            tilt = math.radians(self.rng.uniform(28, 55))
+            ex, ey, ez = math.cos(a) * math.sin(tilt) * ln, math.sin(a) * math.sin(tilt) * ln, math.cos(tilt) * ln
+            self.rod(f"{name}_branch", (at[0], at[1], tz - 0.06), (at[0] + ex, at[1] + ey, tz - 0.06 + ez), 0.016, self.M("bark"), 8, g)
+            self._leaf_cloud(f"{name}_leaves", (at[0] + ex, at[1] + ey, tz + ez), (h * 0.16, h * 0.16, h * 0.12), 760, 0.042, ("leaf_olive", "leaf_olive2"), g)
         return g
 
-    def umbrella(self, at, size=3.2, h=2.5, name="umbrella"):
+    def umbrella(self, at, size=3.2, h=2.5, name="umbrella", colour="#eee8da"):
+        """Market umbrella: weighted base, timber pole, 8 ribs, fabric canopy with scalloped valance and finial."""
         g = self._collection("Props")
-        self.cyl(f"{name}_base", 0.3, 0.06, (at[0], at[1], 0), self.M("charcoal"), 20, coll=g)
-        self.cyl(f"{name}_pole", 0.03, h - 0.2, (at[0], at[1], 0.06), self.M("black"), 12, coll=g)
-        self.cyl(f"{name}_canopy", size / 2, 0.35, (at[0], at[1], h - 0.2), self.M("canvas"), 8, r_top=0.03, coll=g)
-        self.box(f"{name}_valance", (size * 0.92, size * 0.92, 0.12), (at[0], at[1], h - 0.24), 22.5, self.M("canvas"), g)
+        m = self.mat_plain(f"canvas_{colour}", colour, roughness=0.95)
+        self.lathe(f"{name}_base", [(0, 0), (0.28, 0), (0.28, 0.05), (0.06, 0.09), (0.035, 0.14), (0, 0.14)], (at[0], at[1], 0), self.M("charcoal"), 32, g)
+        self.cyl(f"{name}_pole", 0.02, h + 0.1, (at[0], at[1], 0.05), self.M("oak_smoked"), 14, coll=g)
+        R = size / 2
+        rise = 0.42
+        z0 = h - 0.26
+        bm = bmesh.new()
+        n = 8
+        rings = [(0.03, z0 + rise), (R * 0.35, z0 + rise * 0.74), (R * 0.72, z0 + rise * 0.34), (R, z0)]
+        vs = [[bm.verts.new((at[0] + r * math.cos(2 * math.pi * k / n + 0.39), at[1] + r * math.sin(2 * math.pi * k / n + 0.39), z)) for k in range(n)] for r, z in rings]
+        for a, b in zip(vs, vs[1:]):
+            for k in range(n):
+                bm.faces.new((a[k], b[k], b[(k + 1) % n], a[(k + 1) % n]))
+        for k in range(n):   # scalloped valance
+            p0, p1 = vs[-1][k], vs[-1][(k + 1) % n]
+            bm.faces.new((p0, bm.verts.new(p0.co + Vector((0, 0, -0.14))), bm.verts.new(p1.co + Vector((0, 0, -0.14))), p1))
+        bm.normal_update(); project_uvs(bm)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me); bm.free()
+        o = bpy.data.objects.new(f"{name}_canopy", me)
+        o.data.materials.append(m)
+        g.objects.link(o)
+        self.lathe(f"{name}_finial", [(0.03, 0), (0.035, 0.02), (0.02, 0.05), (0.012, 0.09), (0, 0.11)], (at[0], at[1], z0 + rise), self.M("brass"), 16, g)
+        for k in range(n):
+            a = 2 * math.pi * k / n + 0.39
+            self.rod(f"{name}_rib", (at[0], at[1], z0 + rise - 0.04), (at[0] + math.cos(a) * R * 0.97, at[1] + math.sin(a) * R * 0.97, z0 - 0.015), 0.007, self.M("oak_smoked"), 6, g)
         return g
 
     def sign(self, body, at, rot=0.0, z=2.9, size=0.32, mat="walnut", name="sign"):
@@ -1279,67 +1988,415 @@ class Kit:
         r = math.radians(rot)
         return self.text(name, body, (at[0] - math.sin(r) * 0.02, at[1] + math.cos(r) * 0.02, z), rot, size, self.M(mat), extrude=0.015)
 
-    def art(self, at, rot=0.0, z=1.6, w=0.7, h=0.5, name="art"):
+    def art(self, at, rot=0.0, z=1.6, w=0.7, h=0.95, frame="black", name="art", print_id=None):
+        """Framed print with a real image and mount; `at` on the wall face, rot = wall direction. frame: any material."""
         g = self._collection("Props")
         r = math.radians(rot)
         nx, ny = -math.sin(r), math.cos(r)
-        self.box(f"{name}_frame", (w, 0.03, h), (at[0] + nx * 0.015, at[1] + ny * 0.015, z), rot, self.M("black"), g)
-        self.box(f"{name}_print", (w - 0.08, 0.01, h - 0.08), (at[0] + nx * 0.035, at[1] + ny * 0.035, z), rot, self.M("cream"), g)
+        pid = self.rng.randrange(12) if print_id is None else print_id
+        self.box(f"{name}_frame", (w, 0.03, h), (at[0] + nx * 0.015, at[1] + ny * 0.015, z), rot, self.M(frame), g)
+        self.box(f"{name}_mount", (w - 0.05, 0.008, h - 0.05), (at[0] + nx * 0.03, at[1] + ny * 0.03, z), rot, self.M("white"), g, bevel=0)
+        m = self.mat_image(f"art_{pid}", os.path.join(self.tex or "", "art", f"art_{pid:02d}.jpg"), roughness=0.55)
+        self._picture(f"{name}_print", (at[0] + nx * 0.036, at[1] + ny * 0.036), rot, z, w - 0.17, h - 0.17, m, g)
         return g
 
-    def lights(self, sun=True, sun_elev=38, sun_az=140, sun_power=5.0, fills=True, sky=True):
-        """World (Nishita sky) + sun + a soft ceiling fill in every enclosed room with no lamp."""
+    def gallery_wall(self, a, b, z=1.65, n=None, frame="black", side=1, name="gallery"):
+        """A hung salon of mixed-size framed prints between two points on a wall face."""
+        (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
+        n = n or max(2, int(L / 0.72))
+        for i in range(n):
+            u = L * (i + 0.5) / n
+            w_, h_ = self.rng.choice(((0.5, 0.7), (0.62, 0.84), (0.42, 0.56), (0.5, 0.5)))
+            self.art((a[0] + ux * u, a[1] + uy * u), ang, z + self.rng.uniform(-0.12, 0.12), w_, h_, frame, f"{name}{i}")
+
+    def _glazing_outward(self):
+        """Outward plan normal of the wall with the most glazing: the side daylight should come from."""
+        best, bestw = (0.0, -1.0), 0.0
+        for w in self.scene["walls"]:
+            gl = sum(o["width"] for o in self.scene.get("openings", []) if o["wallId"] == w["id"] and o["type"] == "window")
+            if gl <= bestw:
+                continue
+            ax, ay = w["a"]; bx, by = w["b"]
+            L = math.hypot(bx - ax, by - ay) or 1.0
+            nx, ny = -(by - ay) / L, (bx - ax) / L
+            mx, my = (ax + bx) / 2, (ay + by) / 2
+            off = w["thickness"] / 2 + 0.1
+            r = self._room_at(mx + nx * off, my + ny * off)
+            if r and (r.get("ceilingHeight") or 0) > 0:
+                nx, ny = -nx, -ny
+            best, bestw = (nx, ny), gl
+        return best
+
+    def lights(self, mood="day", sun=True, sun_elev=None, sun_az=None, sun_power=None, fills=True, sky=True):
+        """World + sun + a soft fill in lampless rooms. mood: "day" (bright, sun through the glazing) | "golden" (low warm sun) |
+        "evening" (dusk sky, interior lamps carry the room). By default the sun is aimed through the main glazing.
+        sun_az (optional) = plan angle of the direction TOWARD the sun, degrees CCW from +x (east); sun_elev = degrees above horizon."""
         S = self.scene
+        self._mood = mood
+        presets = {"day": (38.0, 3.0, (1.0, 0.96, 0.9), 0.6), "golden": (16.0, 5.0, (1.0, 0.76, 0.52), 1.1), "evening": (-1.0, 0.0, (1.0, 0.6, 0.4), 1.6)}
+        elev, power, col, sky_strength = presets.get(mood, presets["day"])
+        elev = elev if sun_elev is None else sun_elev
+        power = power if sun_power is None else sun_power
+        ox, oy = self._glazing_outward()
+        base = math.atan2(oy, ox)
+        az = base + math.radians(32) if sun_az is None else math.radians(sun_az)
+        ce, se = math.cos(math.radians(elev)), math.sin(math.radians(elev))
+        toward = Vector((math.cos(az) * ce, math.sin(az) * ce, se))
         world = bpy.data.worlds.get("CafeWorld") or bpy.data.worlds.new("CafeWorld")
         self.sc.world = world
         world.use_nodes = True
         nt = world.node_tree
         bg = next(n for n in nt.nodes if n.type == "BACKGROUND")
         if sky:
-            try:
-                skyn = nt.nodes.new("ShaderNodeTexSky")
-                skyn.sky_type = "NISHITA"
-                skyn.sun_elevation = math.radians(sun_elev)
-                skyn.sun_rotation = math.radians(sun_az)
-                # The sky already carries a bright sun disc; we add our own SUN lamp (below) as the
-                # real, shadow-casting key. Leaving both on gives a double sun with mismatched shadow
-                # direction, so turn the sky's disc off and let the sky be pure ambient fill.
-                try:
-                    skyn.sun_disc = False
-                except Exception:
-                    pass
-                nt.links.new(skyn.outputs["Color"], bg.inputs["Color"])
-                bg.inputs["Strength"].default_value = 1.0
-            except Exception:
-                bg.inputs["Color"].default_value = hex_to_linear("#cfdbe6")
+            skyn = nt.nodes.new("ShaderNodeTexSky")
+            types = [i.identifier for i in skyn.bl_rna.properties["sky_type"].enum_items]
+            skyn.sky_type = next((t for t in ("MULTIPLE_SCATTERING", "SINGLE_SCATTERING", "NISHITA", "HOSEK_WILKIE") if t in types), types[0])
+            if hasattr(skyn, "sun_disc"):
+                skyn.sun_disc = False   # the SUN lamp below is the shadow-casting key
+            if hasattr(skyn, "sun_elevation"):
+                skyn.sun_elevation = math.radians(elev)
+                skyn.sun_rotation = math.atan2(toward.x, toward.y)
+            nt.links.new(skyn.outputs["Color"], bg.inputs["Color"])
+            bg.inputs["Strength"].default_value = sky_strength
+        else:
+            bg.inputs["Color"].default_value = hex_to_linear("#cfdbe6")
         g = self._collection("Lighting")
-        if sun:
+        if sun and power > 0 and elev > 0:
             d = bpy.data.lights.new("Sun", "SUN")
-            d.energy = sun_power; d.angle = math.radians(1.5)
+            d.energy = power; d.angle = math.radians(1.2); d.color = col
             o = bpy.data.objects.new("Sun", d)
-            o.rotation_euler = (math.radians(90 - sun_elev), 0, math.radians(sun_az))
+            o.rotation_euler = toward.to_track_quat("Z", "Y").to_euler()
             g.objects.link(o)
         if fills:
-            lamp_pts = [tuple(o.location[:2]) for o in g.objects if o.type == "LIGHT" and o.data.type in ("POINT", "SPOT")]
+            lamp_pts = [tuple(o.location[:2]) for c in bpy.data.collections for o in c.objects if o.type == "LIGHT" and o.data.type in ("POINT", "SPOT", "AREA")]
             for room in S["rooms"]:
                 ch = room.get("ceilingHeight") or 0
                 if ch <= 0:
                     continue
                 poly = room["polygon"]
-                has_lamp = any(point_in_poly(poly, x, y) for x, y in lamp_pts)
+                if any(point_in_poly(poly, x, y) for x, y in lamp_pts) and mood != "evening":
+                    continue
                 cx, cy = _centroid(poly)
                 xs = [p[0] for p in poly]; ys = [p[1] for p in poly]
-                w = max(xs) - min(xs); dd = max(ys) - min(ys)
+                w, dd = max(xs) - min(xs), max(ys) - min(ys)
                 d = bpy.data.lights.new(f"fill_{room['id']}", "AREA")
                 d.shape = "RECTANGLE"; d.size = min(max(w * 0.5, 0.4), 2.2); d.size_y = min(max(dd * 0.5, 0.4), 2.2)
-                # Insurance fill only: enough that a windowless/lampless room is never black, but low
-                # enough that daylight + lamps stay the shaping lights. Over-strong fills were the main
-                # cause of the flat, shadowless, "game-engine" look.
-                d.energy = min(max(w * dd * (3.0 if has_lamp else 8.0), 20.0), 110.0); d.color = kelvin_to_rgb(3000)
+                d.energy = min(max(w * dd * 5.0, 20.0), 110.0); d.color = kelvin_to_rgb(3800)
                 o = bpy.data.objects.new(f"fill_{room['id']}", d)
                 o.location = (cx, cy, ch - 0.08)
                 g.objects.link(o)
         return g
+
+    # ---------------- decorative architecture ----------------
+    def fluted_panel(self, a, b, z0=0.0, z1=2.4, mat="walnut", style="fluted", side=1, name="fluted"):
+        """Reeded / slatted cladding on a wall face from a to b; style "fluted" | "slat"."""
+        (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
+        g = self._collection("Design")
+        return self._front(name, a, b, (nx, ny), 0.01, z0, z1, f"{style}:{mat}", g)
+
+    def curtain(self, a, b, z0=0.05, z1=3.1, colour="linen:#e6dccb", rail="brass", side=1, offset=0.1, open_frac=0.0, name="curtain"):
+        """Floor-to-ceiling wave drapes with a rail, along a wall face (use to frame glazing or soften a wall). open_frac 0..0.9 parts them to both sides."""
+        (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
+        g = self._collection("Design")
+        self.rod(f"{name}_rail", (a[0] + nx * offset, a[1] + ny * offset, z1), (b[0] + nx * offset, b[1] + ny * offset, z1), 0.011, self.M(rail), 12, g)
+        parts = ((0.0, L),) if open_frac <= 0 else ((0.0, L * (1 - open_frac) / 2), (L - L * (1 - open_frac) / 2, L))
+        for s0, s1 in parts:
+            w_ = s1 - s0
+            folds = max(3, int(w_ / 0.15))
+            nu = folds * 6
+            nv = 8
+            bm = bmesh.new()
+            grid = []
+            for i in range(nu + 1):
+                t = i / nu
+                col = []
+                for j in range(nv):
+                    v = j / (nv - 1)
+                    amp = 0.045 + 0.018 * (1 - v)
+                    o = offset + amp * math.sin(t * folds * 2 * math.pi) + 0.006 * math.sin(v * 7 + t * 40)
+                    u = s0 + t * w_
+                    col.append(bm.verts.new((a[0] + ux * u + nx * o, a[1] + uy * u + ny * o, z0 + (z1 - z0) * v)))
+                grid.append(col)
+            for i in range(nu):
+                for j in range(nv - 1):
+                    bm.faces.new((grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]))
+            bm.normal_update()
+            for f in bm.faces:
+                f.smooth = True
+            project_uvs(bm)
+            me = bpy.data.meshes.new(name)
+            bm.to_mesh(me); bm.free()
+            o = bpy.data.objects.new(name, me)
+            o.data.materials.append(self.M(colour))
+            g.objects.link(o)
+        return g
+
+    def _arch_points(self, w, h, n=20):
+        """Arch outline in (u, z), from bottom-left, over the semicircle, to bottom-right."""
+        r = w / 2
+        pts = [(-r, 0.0)]
+        for i in range(n + 1):
+            t = math.pi - math.pi * i / n
+            pts.append((r * math.cos(t), h - r + r * math.sin(t)))
+        pts.append((r, 0.0))
+        return pts
+
+    def _arch_mesh(self, name, at, rot, z, w, h, mat, off, depth=0.0, ring=0.0, g=None):
+        """Filled arch plane (ring=0) or a raised arch frame `ring` wide, on a wall face."""
+        r_ = math.radians(rot)
+        ux, uy = math.cos(r_), math.sin(r_)
+        nx, ny = -uy, ux
+        bm = bmesh.new()
+        def V(u, zz, d):
+            return bm.verts.new((at[0] + ux * u + nx * (off + d), at[1] + uy * u + ny * (off + d), z + zz))
+        outer = self._arch_points(w + 2 * ring, h + ring)
+        if ring <= 0:
+            f = bm.faces.new([V(u, zz, 0.0) for u, zz in reversed(outer)] if False else [V(u, zz, 0.0) for u, zz in outer][::-1])
+        else:
+            inner = self._arch_points(w, h)
+            of = [V(u, zz, depth) for u, zz in outer]
+            inf = [V(u, zz, depth) for u, zz in inner]
+            ob = [V(u, zz, 0.0) for u, zz in outer]
+            ib = [V(u, zz, 0.0) for u, zz in inner]
+            for i in range(len(outer) - 1):
+                bm.faces.new((of[i], of[i + 1], inf[i + 1], inf[i]))
+                bm.faces.new((ob[i], ob[i + 1], of[i + 1], of[i]))
+                bm.faces.new((inf[i], inf[i + 1], ib[i + 1], ib[i]))
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        crisp_smooth(bm, 40.0)
+        project_uvs(bm)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me); bm.free()
+        o = bpy.data.objects.new(name, me)
+        o.data.materials.append(mat)
+        (g or self._collection("Design")).objects.link(o)
+        return o
+
+    def arch_mirror(self, at, rot=0.0, z=0.5, w=1.0, h=2.1, frame="brass", name="archmirror"):
+        """Tall arched mirror on a wall face (at = bottom centre on the face, rot = wall direction)."""
+        self._arch_mesh(f"{name}_glass", at, rot, z, w, h, self.M("mirror"), 0.01)
+        self._arch_mesh(f"{name}_frame", at, rot, z, w, h, self.M(frame), 0.0, depth=0.03, ring=0.03)
+
+    def arch_niche(self, at, rot=0.0, z=0.95, w=0.9, h=1.7, back="#1f3a35", frame="plaster_white", shelves=2, led=True, name="niche"):
+        """Arched display niche: coloured back, raised surround, lit shelves with bottles and jars. at = bottom centre on the wall face."""
+        g = self._collection("Design")
+        r = math.radians(rot)
+        ux, uy, nx, ny = math.cos(r), math.sin(r), -math.sin(r), math.cos(r)
+        self._arch_mesh(f"{name}_back", at, rot, z, w, h, self.M(back), 0.008, g=g)
+        self._arch_mesh(f"{name}_frame", at, rot, z, w, h, self.M(frame), 0.0, depth=0.14, ring=0.07, g=g)
+        for i in range(shelves):
+            sz = z + (h - w / 2) * (i + 0.6) / shelves
+            self.box(f"{name}_shelf", (w, 0.14, 0.025), (at[0] + nx * 0.075, at[1] + ny * 0.075, sz), rot, self.M(frame), g)
+            if led:
+                self.box(f"{name}_led", (w - 0.06, 0.008, 0.006), (at[0] + nx * 0.12, at[1] + ny * 0.12, sz - 0.018), rot, self.M("led"), g, bevel=0)
+            n = max(2, int(w / 0.16))
+            bm = bmesh.new()
+            for k in range(n):
+                u = -w / 2 + 0.08 + k * (w - 0.16) / max(1, n - 1)
+                x, y = at[0] + ux * u + nx * 0.08, at[1] + uy * u + ny * 0.08
+                hh = self.rng.uniform(0.2, 0.32)
+                lathe_into(bm, [(0, 0), (0.035, 0), (0.038, 0.01), (0.038, hh * 0.65), (0.016, hh * 0.82), (0.015, hh), (0, hh)], (x, y, sz + 0.0125), seg=12)
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+            crisp_smooth(bm, 50.0)
+            project_uvs(bm)
+            me = bpy.data.meshes.new(name)
+            bm.to_mesh(me); bm.free()
+            o = bpy.data.objects.new(f"{name}_bottles", me)
+            o.data.materials.append(self.M("dark_glass"))
+            g.objects.link(o)
+
+    def ceiling_beams(self, x0, y0, x1, y1, z, spacing=1.0, size=(0.12, 0.2), mat="oak_smoked", axis="y", name="beam"):
+        """Exposed beams under a ceiling at height z over a plan rectangle; axis = direction they run."""
+        g = self._collection("Design")
+        w, d = abs(x1 - x0), abs(y1 - y0)
+        ct = max(2, int((w if axis == "y" else d) / spacing))
+        for i in range(ct + 1):
+            if axis == "y":
+                self.box(f"{name}", (size[0], d, size[1]), (min(x0, x1) + w * i / ct, (y0 + y1) / 2, z - size[1] / 2), 0, self.M(mat), g, bevel=0.008)
+            else:
+                self.box(f"{name}", (w, size[0], size[1]), ((x0 + x1) / 2, min(y0, y1) + d * i / ct, z - size[1] / 2), 0, self.M(mat), g, bevel=0.008)
+
+    def ceiling_coffers(self, x0, y0, x1, y1, z, cell=1.2, mat="plaster_white", drop=0.14, led=False, name="coffer"):
+        """Coffered ceiling grid under height z."""
+        g = self._collection("Design")
+        w, d = abs(x1 - x0), abs(y1 - y0)
+        nx_, ny_ = max(1, int(w / cell)), max(1, int(d / cell))
+        for i in range(nx_ + 1):
+            self.box(name, (0.1, d, drop), (min(x0, x1) + w * i / nx_, (y0 + y1) / 2, z - drop / 2), 0, self.M(mat), g, bevel=0.008)
+        for j in range(ny_ + 1):
+            self.box(name, (w, 0.1, drop), ((x0 + x1) / 2, min(y0, y1) + d * j / ny_, z - drop / 2), 0, self.M(mat), g, bevel=0.008)
+
+    def exposed_duct(self, a, b, z, r=0.17, mat="steel", name="duct"):
+        """Round spiral duct with hangers and joint bands, industrial ceilings."""
+        (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
+        g = self._collection("Design")
+        self.rod(f"{name}_body", (a[0], a[1], z), (b[0], b[1], z), r, self.M(mat), 28, g)
+        for i in range(int(L / 1.4) + 1):
+            u = i * 1.4
+            x, y = a[0] + ux * u, a[1] + uy * u
+            self.rod(f"{name}_band", (x - ux * 0.025, y - uy * 0.025, z), (x + ux * 0.025, y + uy * 0.025, z), r + 0.008, self.M("steel"), 28, g)
+            self.cyl(f"{name}_hanger", 0.005, 0.6, (x, y, z + r), self.M("black_steel"), 6, coll=g)
+
+    def column(self, at, h=3.3, r=0.2, shape="round", mat="plaster_white", name="column"):
+        """Free-standing column; shape "round" or "square"."""
+        g = self._collection("Design")
+        if shape == "round":
+            self.lathe(name, [(0, 0), (r * 1.25, 0), (r * 1.25, 0.1), (r, 0.16), (r, h - 0.16), (r * 1.25, h - 0.1), (r * 1.25, h), (0, h)], (at[0], at[1], 0), self.M(mat), 36, g)
+        else:
+            self.box(name, (2 * r, 2 * r, h), (at[0], at[1], h / 2), 0, self.M(mat), g, bevel=0.008)
+
+    # ---------------- equipment ----------------
+    def equip(self, category, at, rot=0.0, z=0.0, variant=None, name=None):
+        """Place one detailed library model. Categories: fridge (glass door), fridge_tall, undercounter, freezer, stove, oven (combi),
+        oven_counter, microwave, toaster, dishwasher, sink, basin, toilet, ice_maker, hood, waste, extinguisher, grinder, blender, boiler.
+        rot uses the chair rule: the front faces (sin rot, -cos rot)."""
+        g = self._collection("Equipment")
+        it = self.pick_asset(category, variant=variant)
+        if it:
+            self._occupied.append((at[0], at[1], max(it["footprint"]) * 0.5))
+        return self.place(category, at, rot=rot, z=z, coll=g, name=name or f"{category}_{it['variant'] if it else 'x'}", variant=variant)
+
+    def _run_at(self, x, y, margin=0.08):
+        for R in self._runs:
+            dx, dy = x - R["a"][0], y - R["a"][1]
+            t = dx * R["u"][0] + dy * R["u"][1]
+            dn = dx * R["n"][0] + dy * R["n"][1]
+            if -margin <= t <= R["L"] + margin and -margin <= dn <= R["depth"] + margin:
+                return R, t
+        return None, 0.0
+
+    def _free_on_run(self, R, t, half):
+        """Slide along the run until nothing already sits there; None if the run is full."""
+        for shift in (0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.45, -0.45, 0.6, -0.6, 0.8, -0.8):
+            tt = t + shift
+            if tt - half < 0.02 or tt + half > R["L"] - 0.02:
+                continue
+            x = R["a"][0] + R["u"][0] * tt + R["n"][0] * R["depth"] / 2
+            y = R["a"][1] + R["u"][1] * tt + R["n"][1] * R["depth"] / 2
+            if all(math.hypot(x - ox, y - oy) > half + orad - 0.03 for ox, oy, orad in self._occupied):
+                return tt, x, y
+        return None
+
+    def plan_equipment(self, skip=()):
+        """Put every appliance from the plan's equipment legend into the building, at its plan position, using detailed models:
+        items falling inside a counter sit on it (or become an under-counter unit in its front); the rest stand on the floor against
+        their wall. Call AFTER counter_run/back_bar/espresso_station. Never floats anything. Returns a report dict."""
+        placed, skipped = [], []
+        toilet_rooms = set()
+        for f in self.scene.get("fixtures", []):
+            cat = f.get("category")
+            nm = (f.get("name") or f.get("label") or "").lower()
+            if cat in skip or any(k in nm for k in skip):
+                continue
+            x, y = f["position"][:2]
+            fw, fd = (f.get("footprint") or [0.5, 0.5])[:2]
+            rot = (f.get("rotation") or 0.0) + 180.0
+            lib = None
+            mode = "floor"
+            if "toilet" in nm or cat == "toilet":
+                rid = (self._room_at(x, y) or {}).get("id")
+                if rid in toilet_rooms:     # parsed plans can list the same WC fixture twice
+                    continue
+                toilet_rooms.add(rid)
+                lib = "toilet"
+            elif cat == "sink" and ("washbasin" in nm or "wash basin" in nm or "hand wash" in nm or (self._room_at(x, y) or {}).get("category", "").startswith("wc")):
+                lib = "basin"
+            elif cat == "sink":
+                lib, mode = "sink", "bench"
+            elif cat == "fridge":
+                lib, mode = ("undercounter", "under") if fw > 1.0 or self._run_at(x, y)[0] else ("fridge", "floor")
+            elif cat == "freezer":
+                lib = "freezer" if ("300" in nm or fw >= fd + 0.05) else "fridge_tall"
+            elif cat == "dishwasher":
+                lib, mode = "dishwasher", "under"
+            elif cat == "ice_maker" and "storage" not in nm:
+                lib = "ice_maker"
+            elif cat == "oven":
+                if "merry" in nm or "speed" in nm or self._run_at(x, y)[0]:
+                    lib, mode = "oven_counter", "top"
+                elif any(k in nm for k in ("stove", "range", "hob", "cook")):
+                    lib = "stove"
+                else:
+                    lib = "stove" if not any(p.startswith("stove") for p in placed) else "oven"
+            elif "microwave" in nm:
+                lib, mode = "microwave", "top"
+            elif "toaster" in nm:
+                lib, mode = "toaster", "top"
+            elif "waste" in nm or "bin" in nm.split():
+                lib = "waste"
+            elif "extinguisher" in nm:
+                lib = "extinguisher"
+            elif cat in ("blender", "mixer"):
+                lib, mode = "blender", "top"
+            elif cat == "boiler":
+                lib, mode = "boiler", "top"
+            elif cat == "grinder" and not getattr(self, "_has_grinders", False):
+                lib, mode = "grinder", "top"
+            if not lib or lib in skip:
+                continue
+            it = self.pick_asset(lib)
+            if not it:
+                skipped.append(f"{lib}:no-model")
+                continue
+            half = it["footprint"][0] / 2
+            R, t = self._run_at(x, y)
+            if mode in ("top", "under") or (mode == "bench" and R):
+                if R is None:
+                    if mode == "top":
+                        skipped.append(f"{lib}@({x:.1f},{y:.1f}):no-counter")
+                        continue
+                    self._occupied.append((x, y, half))
+                    self.equip(lib, (x, y), rot=rot, name=f"{lib}_{len(placed)}")
+                    placed.append(lib)
+                    continue
+                if lib == "sink":   # inset basin in the worktop rather than a free-standing bench
+                    free = self._free_on_run(R, t, 0.22)
+                    if free:
+                        self._inset_sink(R, free[0], f"sink_{len(placed)}")
+                        placed.append("sink_inset")
+                    continue
+                free = self._free_on_run(R, t, half)
+                if not free:
+                    skipped.append(f"{lib}:run-full")
+                    continue
+                tt, px, py = free
+                fx, fy = R["front"]
+                r2 = math.degrees(math.atan2(fx, -fy))
+                self._occupied.append((px, py, half))
+                if mode == "under":
+                    D = it["footprint"][1]
+                    # front of the unit just proud of the counter's working face
+                    side = -1 if R["front"] == R["n"] else 1
+                    edge = R["depth"] if side == -1 else 0.0
+                    bx_ = R["a"][0] + R["u"][0] * tt + R["n"][0] * (edge + side * (D / 2 - 0.012))
+                    by_ = R["a"][1] + R["u"][1] * tt + R["n"][1] * (edge + side * (D / 2 - 0.012))
+                    self.place(lib, (bx_, by_), rot=r2, coll=self._collection("Equipment"), name=f"{lib}_{len(placed)}")
+                else:
+                    self.place(lib, (px, py), rot=r2, z=R["h"], coll=self._collection("Equipment"), name=f"{lib}_{len(placed)}")
+                placed.append(lib)
+            else:
+                if any(math.hypot(x - ox, y - oy) < half * 0.7 + orad * 0.7 for ox, oy, orad in self._occupied):
+                    skipped.append(f"{lib}@({x:.1f},{y:.1f}):overlap")
+                    continue
+                self.equip(lib, (x, y), rot=rot, name=f"{lib}_{len(placed)}")
+                placed.append(lib)
+        report = {"placed": placed, "skipped": skipped}
+        print(f"PLAN_EQUIPMENT placed={len(placed)} {sorted(set(placed))} skipped={skipped}", flush=True)
+        return report
+
+    def _inset_sink(self, R, t, name):
+        g = self._collection("Equipment")
+        cx = R["a"][0] + R["u"][0] * t + R["n"][0] * R["depth"] / 2
+        cy = R["a"][1] + R["u"][1] * t + R["n"][1] * R["depth"] / 2
+        h = R["h"]
+        ang = R["ang"]
+        self._occupied.append((cx, cy, 0.25))
+        self.box(f"{name}_rim", (0.42, 0.38, 0.006), (cx, cy, h + 0.002), ang, self.M("brushed_steel"), g, bevel=0)
+        self.box(f"{name}_bowl", (0.36, 0.32, 0.002), (cx, cy, h + 0.0055), ang, self.M("steel_dark") if "steel_dark" in self.mats else self.M("charcoal"), g, bevel=0)
+        back = 1 if R["front"] != R["n"] else -1
+        tx, ty = cx + R["n"][0] * back * 0.22, cy + R["n"][1] * back * 0.22
+        self.lathe(f"{name}_tap", [(0.024, 0), (0.02, 0.012), (0.012, 0.02), (0.012, 0.2), (0.008, 0.21), (0.008, 0.28), (0, 0.285)], (tx, ty, h), self.M("chrome"), 16, g)
+        self.rod(f"{name}_spout", (tx, ty, h + 0.27), (tx - R["n"][0] * back * 0.17, ty - R["n"][1] * back * 0.17, h + 0.25), 0.008, self.M("chrome"), 10, g)
 
     # ---------------- cameras & render ----------------
     def camera(self, at, look_at, eye=1.55, fov=68, name="Camera", label=None, look_z=1.3):
@@ -1356,6 +2413,9 @@ class Kit:
             self.sc.camera = o
         self.cameras.append((o, label or name))
         return o
+
+    def _exposure(self):
+        return {"day": 0.75, "golden": 0.9, "evening": 1.05}.get(self._mood, 0.75)
 
     def finish(self, engine="CYCLES", samples=96, res=(1600, 900)):
         """Render settings. Live Blender keeps EEVEE for interaction; headless renders use Cycles."""
@@ -1394,16 +2454,13 @@ class Kit:
         # A bare AgX transform desaturates and flattens; a contrast look + a touch of exposure
         # restores the punch a reference interior shot has. Look names vary by Blender version,
         # so try the richer ones first and fall back.
-        for _look in ("AgX - Medium High Contrast", "AgX - High Contrast", "Medium High Contrast", "High Contrast", "None"):
+        for _look in ("AgX - Medium High Contrast", "AgX - Base Contrast", "None"):
             try:
                 sc.view_settings.look = _look
                 break
             except TypeError:
                 continue
-        try:
-            sc.view_settings.exposure = 0.3
-        except Exception:
-            pass
+        sc.view_settings.exposure = self._exposure()
         for o in bpy.context.selected_objects:
             o.select_set(False)
         return sc
@@ -1417,6 +2474,9 @@ class Kit:
         out = []
         for i, (cam, label) in enumerate(self.cameras):
             sc.camera = cam
+            room = self._room_at(cam.location.x, cam.location.y)
+            indoors = bool(room and (room.get("ceilingHeight") or 0) > 0)
+            sc.view_settings.exposure = self._exposure() if indoors else self._exposure() - {"day": 1.55, "golden": 1.5, "evening": 0.3}.get(self._mood, 1.5)
             fn = f"still_{i:02d}.jpg"
             sc.render.image_settings.file_format = "JPEG"
             sc.render.image_settings.quality = 92
@@ -1463,11 +2523,53 @@ class Kit:
         bpy.ops.wm.save_as_mainfile(filepath=path)
         return path
 
-    def export_glb(self, path, lights=True):
+    def _web_lod(self, leaf_keep=0.3, target=170000):
+        """Lighten the walkable model only (the export runs after renders): thin foliage cards, enlarging what remains so
+        the mass reads the same, and decimate dense meshes until the whole scene is near `target` triangles."""
+        import random as _r
+        rnd = _r.Random(5)
+        seen = set()
+        for o in bpy.data.objects:
+            if o.type != "MESH" or o.data in seen or "_leaf" not in o.name and "_trail" not in o.name:
+                continue
+            if o.name.endswith("_core") or "core" in o.name:
+                continue
+            seen.add(o.data)
+            bm = bmesh.new()
+            bm.from_mesh(o.data)
+            kill = [f for f in bm.faces if rnd.random() > leaf_keep]
+            bmesh.ops.delete(bm, geom=kill, context="FACES")
+            k = (1.0 / leaf_keep) ** 0.5
+            for f in bm.faces:
+                c = f.calc_center_median()
+                for v in f.verts:
+                    v.co = c + (v.co - c) * k
+            bm.to_mesh(o.data)
+            bm.free()
+        def tris(ob):
+            return sum(len(p.vertices) - 2 for p in ob.data.polygons)
+        meshes = [o for o in self.sc.objects if o.type == "MESH" and not o.name.startswith(("floor_", "wall_", "ceiling_"))]
+        total = sum(tris(o) for o in self.sc.objects if o.type == "MESH")
+        if total > target:
+            ratio = max(0.2, target / total)
+            for o in meshes:
+                if tris(o) > 250 and "_leaf" not in o.name and "_trail" not in o.name:
+                    m = o.modifiers.new("web", "DECIMATE")
+                    m.decimate_type = "COLLAPSE"
+                    m.ratio = ratio
+        print(f"WEB_LOD tris_before_decimate={total} ratio={min(1.0, target / max(total, 1)):.2f}", flush=True)
+
+    def export_glb(self, path, lights=True, web_tex=512):
         """Web-weight GLB of the whole café (WebP textures, lights included). Blender (x, y, z) exports
         to glTF (x, z, -y), which is exactly the web viewer's frame (worldX = planX, worldZ = -planY)."""
         for o in bpy.data.objects:
             o.select_set(False)
+        for img in bpy.data.images:      # web weight; call this LAST, renders keep full-size textures
+            w_, h_ = img.size
+            if max(w_, h_) > web_tex and img.has_data:
+                k = web_tex / max(w_, h_)
+                img.scale(max(1, int(w_ * k)), max(1, int(h_ * k)))
+        self._web_lod()
         kwargs = dict(filepath=path, export_format="GLB", export_apply=True, export_lights=lights, export_cameras=False, export_yup=True)
         for extra in ({"export_image_format": "WEBP", "export_image_quality": 80}, {"export_image_format": "JPEG", "export_image_quality": 80}, {}):
             try:

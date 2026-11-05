@@ -1,105 +1,84 @@
-# design.py — Coffee Berry Leo-Center (plan A01) · designer build on top of cafe_kit
-#
-# The runner injects: SCENE (parsed CafeScene dict), TEXTURES (textures dir), Kit (cafe_kit.Kit).
-# Plan frame: x east, y north (up the page), metres. Rooms on this plan:
-#   terrace   x 0.0–10.9, y 0.0–9.0   (street side, open to sky)
-#   dining    x 0.0–11.0, y 10.15–13.3 (glazed facade at y=10.15, street door at x 9.4–10.3)
-#   bar room  x 0.0–4.55, y 13.3–24.0 (west wall x=0; mall entrance on the chamfer at the top)
-#   prep      x 4.65–8.9, y 13.3–15.6  (door at x 4.65–5.45 on y=13.32)
-#   wc        x 9.0–11.0, y 13.3–15.6  (door at x 9.45–10.35 on y=13.32)
-# Concept: warm walnut joinery, honed terrazzo tops with LED kicks, cream plaster, brushed brass,
-# black steel shelving, oat bouclé seating; dark ceiling with downlights; branded terrace.
+# design.py — API and care exemplar. Concept "Ink & Clay", on the Coffee Berry plan.
+# Concept: ink-blue joinery against clay plaster, slate at the bar, boards in the dining room.
+# Palette: clay "#d9cfc1", ink "#2c3442", oxidised copper accent. Floors: slate bar, smoked oak dining, pavers outside.
+# Light: daylight from the glazing, copper domes over tables, LED coves in the back bar, track light on the art.
+# Rooms on this plan: terrace y<8.06 | dining x 0-10.93, y 9-12.33 (glazed south facade, street door x 9.3-10.3)
+# bar room x 0-4.61, y 12.33-22.8 | prep x 4.61-9.03, y 12.33-14.61 | WC x 9.03-10.93, y 12.33-14.61.
 
-K = Kit(SCENE, textures_dir=TEXTURES)
+K = Kit(SCENE, textures_dir=TEXTURES, seed=SEED, style=STYLE)
 CEIL = 3.35
+INK, CLAY = "#2c3442", "#d9cfc1"
 
-# ---- shell: walls/doors/glazing from the plan, floors per zone, dark ceilings with downlights
-K.architecture(
-    wall="plaster",
-    floors={"seating_indoor": "oak", "service_counter": "stone", "seating_outdoor": "stone",
-            "preparation": "concrete", "wc_disabled": "concrete"},
-)
+# ---- envelope ---------------------------------------------------------------------------------
+K.architecture(wall=CLAY, ceiling="plaster_white", ground="paving", skirt_mat="charcoal", door_mat="oak_smoked",
+               floors={"seating_indoor": "oak_smoked", "service_counter": "slate", "seating_outdoor": "paving_herringbone",
+                       "preparation": "hex_tile:#c9c6bd", "wc_disabled": "square_tile:#cfc9bd"})
+K.facade(material="brick_stone", plinth=INK, plinth_h=0.5, cornice=INK, pilasters=INK, band=INK, awning=INK)
+K.sign("coffee berry", (5.0, 8.85), rot=180, z=3.05, size=0.42, mat="copper", name="fascia")      # read from the street
 
-# ---- DESIGN SCHEME ------------------------------------------------------------------------
-# Concept: "warm workshop" — dark ceiling with a walnut slat raft over the bar, walnut cladding and
-# a sage colour block in the dining room, lime-plaster quote wall at the end of the order corridor,
-# checker tile at the bar, oak boards in the dining room, layered 2700K light (pendants, track,
-# sconces, LED coves), styled shelves with coffee bags, books and plants.
-K.floor_zone([[0, 13.32], [4.55, 13.32], [4.55, 21.5], [2.05, 23.95], [0, 23.95]], "tile_check")   # bar floor
-K.ceiling_raft(0.8, 14.5, 3.3, 21.5, CEIL, style="slats", drop=0.4, led=True)                      # over the bar
-K.track_light((3.6, 14.8), (3.6, 21.2), CEIL - 0.45, heads=6, aim=(1.6, 18.0))                     # grazing the counter
-K.quote_wall((4.48, 21.43), (1.98, 23.88), ["Crafted with soul", "roasted with care", "served with heart"],
-             z_top=2.3, size=0.2, side=-1, name="quote")   # chamfer wall face (t=0.2)                                           # chamfer wall by the mall door
-K.wall_panel((0.125, 13.245), (0.125, 10.25), 0.0, 2.3, "walnut_slat", side=1, name="dining_cladding")   # behind the dining 2-tops
-K.accent_wall((10.87, 10.25), (10.87, 13.245), "sage", side=1, name="sage_block")   # east wall face (t=0.2)                    # east feature wall
-K.wall_panel((9.3, 13.245), (5.6, 13.245), 2.2, 2.9, "walnut", side=1, name="banquette_back")   # above the banquette panel        # above the banquette
+# ---- every enclosed room is finished ----------------------------------------------------------
+K.finish_walls("seating_indoor", finish=CLAY, dado=INK, dado_h=1.05, dado_style="panel", rail="copper", crown="plaster_white", skirting=INK)
+K.finish_walls("service_counter", finish=CLAY, dado="zellige:#2c3442", dado_h=1.25, rail="copper", crown="plaster_white")
+K.finish_walls("preparation", finish="subway:#ece9e1", skirting="charcoal")
+K.finish_walls("wc_disabled", finish="#e4dfd4", dado="zellige:#2c3442", dado_h=1.4, rail="copper")
 
-# ---- bar room: back bar on the west wall, service counter in front of it ------------------
-# back bar body grows east (left of travel when walking south along x=0)
-K.back_bar((0.125, 21.0), (0.125, 14.3), depth=0.6, shelves=3, cups=True, led=True)   # west wall face (t=0.25)
-K.menu_screen((0.125, 18.9), rot=-90, w=1.45, h=0.82, z=2.75)          # 65" menu over the back bar
-# service counter: body grows west (barista side), customers stand east of x≈2.0
-K.counter_run((1.95, 16.9), (1.95, 21.0), depth=0.7, h=0.95, top="terrazzo", front="walnut_slat")
-K.espresso_station((1.6, 19.9), rot=90, on=0.95, machine_w=1.0, grinders=2)   # faces the customer side
-K.till((1.72, 17.4), rot=90, on=0.95)
-# pastry + grab-and-go displays continue the counter line toward the dining room
-K.display_case((1.6, 16.1), rot=90, w=1.3, d=0.75, name="pastry")
-K.display_case((1.6, 14.9), rot=90, w=1.1, d=0.75, name="grabgo")
-# order corridor east wall: two self-order kiosks, then the retail wall (wall at x=4.55)
-K.kiosk((4.475, 14.3), rot=90, name="kiosk1")
-K.kiosk((4.475, 15.1), rot=90, name="kiosk2")
-K.shelving_wall((4.475, 15.9), (4.475, 20.4), depth=0.35, h=2.4, levels=5, products=True)   # east wall face (t=0.15)
-K.sign("coffee berry", (4.475, 18.15), rot=90, z=2.75, size=0.26, mat="bronze", name="retail_sign")
-# pick-up end: condiment station, high table with stools, neon over it
-K.condiment_station((3.6, 22.3), rot=0)
-K.high_table((2.6, 22.6), rot=0, w=1.4, d=0.5, stools=3)
-K.neon_sign("coffee first", (4.475, 21.2), rot=90, z=2.3, size=0.26)
-K.letter_board((4.475, 15.4), rot=90, z=1.95, w=0.8, h=0.55)
-K.wall_shelf((4.475, 21.0), rot=90, z=1.45, w=1.0, name="shelf_bar")
-K.hanging_plants((1.0, 15.0), (1.0, 21.0), CEIL, n=4)
-K.wall_sconce((0.125, 22.6), rot=-90, z=1.8, name="sconce_bar")
+# ---- ceiling + floor zoning -------------------------------------------------------------------
+K.ceiling_beams(0.3, 9.3, 10.6, 12.1, CEIL, spacing=1.3, mat="oak_smoked", axis="y")
+K.ceiling_raft(0.8, 14.6, 3.4, 19.4, CEIL, style="slats", drop=0.32, led=True)
+K.floor_zone([[8.7, 9.1], [10.83, 9.1], [10.83, 10.5], [8.7, 10.5]], "marble_mosaic", name="door_mat")
 
-# ---- dining room: banquette on the north partition, 2-tops in front, 4-tops along the glazing
-K.banquette((9.3, 13.245), (5.6, 13.245), depth=0.6, seat_mat="boucle")   # north partition face (t=0.15)    # body grows south into the room
-for i, x in enumerate((6.1, 7.4, 8.7)):
-    K.table((x, 12.45), shape="round", size=0.7, chairs=0, name=f"two_top{i}")
-    K.chair((x, 11.75), rot=180, name=f"two_top{i}_chair")              # facing the banquette
-    K.pendant((x, 12.45), CEIL, drop=1.05, style="brass", name=f"pend_two{i}")
-for i, x in enumerate((1.4, 3.3, 5.2, 7.1, 8.9)):
-    K.table((x, 11.35), shape="rect", size=(1.2, 0.7), chairs=4, name=f"window{i}")
-    K.pendant((x, 11.35), CEIL, drop=1.0, style="opal", name=f"pend_win{i}")
-K.art((10.87, 11.2), rot=90, z=1.65, w=0.8, h=0.55, name="art1")
-K.mirror((10.87, 12.4), rot=90, z=1.5, w=1.0, h=1.5, name="mirror_dining")
-K.wall_sconce((10.87, 10.6), rot=90, z=1.8, name="sconce_d1")
-K.wall_sconce((10.87, 13.0), rot=90, z=1.8, name="sconce_d2")
-K.wall_shelf((10.2, 13.245), rot=180, z=1.5, w=1.0, name="shelf_dining")
-K.rug((7.4, 12.2), w=4.0, d=1.4, name="rug_dining")
-K.plant((0.45, 12.8), h=1.3, name="plant_dining")
-K.sign("coffee berry", (5.5, 10.05), rot=180, z=2.85, size=0.4, mat="walnut", name="fascia")   # outer facade face, read from the street (street on the left of rot)  # over the glazing, read from the street
+# ---- service line where the plan draws it ------------------------------------------------------
+K.back_bar((0.125, 21.4), (0.125, 14.0), depth=0.6, shelves=3, shelf_z=(1.5, 1.9, 2.3), body=INK, top="marble_white", splash="zellige:#2c3442")
+K.espresso_station((0.43, 19.9), rot=90, on=0.92, grinders=2)
+K.menu_screen((0.15, 16.75), rot=-90, w=1.45, h=0.82, z=2.75)
+K.counter_run((2.375, 15.95), (2.375, 19.4), depth=0.65, top="marble_white", front="fluted:veneer:#2c3442", rail="copper", name="counter")
+K.till((2.1, 16.3), rot=-90, on=0.95, name="till1")   # screen faces the barista, west of this counter
+K.display_case((2.05, 15.3), rot=90, w=1.3, d=0.83, body=INK, top="marble_white", name="pastry")
+K.pendant_linear((2.05, 17.7), CEIL, rot=90, drop=1.05)
+K.shelving_wall((4.51, 15.15), (4.51, 16.75), depth=0.35, h=0.85, levels=2, name="retail_low")
+K.condiment_station((4.285, 17.3), rot=90)
+K.track_light((3.8, 14.8), (3.8, 19.2), CEIL - 0.3, heads=4, aim=(2.0, 17.0))
 
-# ---- terrace: branded umbrellas, 4-tops, olive trees, planters along the street edge ----------
-for i, (x, y) in enumerate(((2.6, 4.6), (8.3, 4.6))):
-    K.umbrella((x, y), size=3.4, h=2.6, name=f"umb{i}")
-for i, (x, y) in enumerate(((1.6, 3.4), (3.7, 5.8), (7.3, 3.4), (9.3, 5.8), (5.5, 7.6))):
-    K.table((x, y), shape="round", size=0.8, chairs=4, top="walnut", seat_mat="boucle_sage", name=f"terr{i}")
-K.olive_tree((0.7, 0.8), h=2.7, name="olive_w")
-K.olive_tree((10.2, 0.8), h=2.7, name="olive_e")
-K.planter_hedge((1.6, 0.3), (9.4, 0.3), w=0.4, h=0.45)                     # street edge
-K.planter_hedge((0.3, 1.2), (0.3, 8.4), w=0.4, h=0.45, name="hedge_w")
-K.planter_hedge((10.6, 1.2), (10.6, 8.4), w=0.4, h=0.45, name="hedge_e")
-K.string_lights((0.8, 9.5), (10.1, 9.5), 2.9, n=16)                         # along the facade
-K.string_lights((0.8, 1.0), (10.1, 1.0), 2.9, n=16, name="festoon2")
+# ---- appliances from the plan's legend, as detailed models --------------------------------------
+K.plan_equipment()
 
-# ---- back of house: prep worktop, stainless run ------------------------------------------
-K.counter_run((8.875, 15.5), (8.875, 13.45), depth=0.65, h=0.9, top="steel", front="steel", led_kick=False, name="prep_run")
+# ---- dining ---------------------------------------------------------------------------------------
+K.banquette((0.125, 12.1), (0.125, 9.35), depth=0.6, seat_mat="velvet:#8a5a3c", panel=None, cushions="channel")
+for i, y in enumerate((9.85, 10.7, 11.55)):
+    K.table((1.1, y), shape="round", size=0.65, top="marble_white", chairs=0, name=f"two{i}")
+    K.chair((1.75, y), rot=-90, name=f"two{i}_chair")
+    K.pendant((1.1, y), CEIL, drop=1.05, name=f"pend_two{i}")
+for i, x in enumerate((3.3, 5.3, 7.3)):
+    K.table((x, 10.15), shape="rect", size=(1.2, 0.7), top="oak", chairs=4, name=f"win{i}")
+    K.pendant((x, 10.15), CEIL, drop=1.0, name=f"pend_win{i}")
+K.lounge_group((9.3, 11.4), chairs=2, table_top="marble_white", rug="linen:#8a7a66")
+K.arch_mirror((10.815, 10.6), rot=90, z=0.4, w=0.9, h=2.2, frame="copper")
+K.gallery_wall((4.5, 12.26), (2.8, 12.26), z=1.75, n=3, frame="oak_smoked")
+K.fluted_panel((8.15, 12.26), (6.4, 12.26), z0=1.05, z1=2.6, mat="oak_smoked")
+K.curtain((0.6, 9.12), (2.9, 9.12), z0=0.05, z1=3.15, colour="linen:#d8ccb4", open_frac=0.8)
+K.wall_sconce((0.165, 10.3), rot=-90, z=1.75, name="sc1")
+K.wall_sconce((0.165, 11.2), rot=-90, z=1.75, name="sc2")
+K.plant((10.35, 9.6), h=1.3, name="plant_a")
+K.hanging_plants((1.2, 15.0), (1.2, 19.0), CEIL - 0.32, n=3)
+K.wall_shelf((4.12, 20.72), rot=137, z=1.5, w=0.8, name="shelf_chamfer")
 
-# ---- lighting + cameras ---------------------------------------------------------------------
-K.lights(sun_elev=34, sun_az=150, sun_power=5.0)
-K.camera((9.3, 11.0), look_at=(2.0, 16.0), label="Arriving from the street door", look_z=1.5)
-K.camera((3.7, 15.2), look_at=(0.8, 19.6), label="Order corridor and bar")
-K.camera((2.9, 12.0), look_at=(8.6, 12.9), label="Dining room and banquette")
-K.camera((5.5, 6.2), look_at=(5.5, 11.5), label="Terrace toward the facade", look_z=2.0)
-K.stops = [(9.6, 10.9, 120, "Street door"), (3.5, 15.3, 125, "Order corridor"), (3.3, 19.0, 160, "Bar"),
-           (2.9, 12.0, 20, "Dining room"), (5.5, 6.5, 90, "Terrace")]
+# ---- terrace ---------------------------------------------------------------------------------------
+for i, (x, y) in enumerate(((2.3, 5.8), (5.5, 5.8), (2.3, 2.6), (5.5, 2.6), (8.3, 4.2))):
+    K.table((x, y), shape="round", size=0.8, top="marble_white", chairs=4, name=f"terr{i}")
+    K.umbrella((x, y), size=2.9, h=2.6, colour=INK, name=f"umb{i}")
+K.olive_tree((0.7, 0.8), h=2.8, name="olive_w")
+K.olive_tree((10.2, 7.2), h=2.8, name="olive_e")
+K.planter_hedge((1.4, 0.3), (9.4, 0.3), w=0.42, h=0.5, name="hedge_s")
+K.planter_hedge((0.3, 1.5), (0.3, 7.4), w=0.42, h=0.5, name="hedge_w")
+K.string_lights((0.4, 7.9), (10.5, 7.9), 2.95, n=18)
+
+# ---- light, cameras, tour --------------------------------------------------------------------------
+K.lights(mood="day")
+K.camera((9.6, 9.75), look_at=(2.5, 11.4), label="Arriving at the street door", look_z=1.25)
+K.camera((3.6, 14.2), look_at=(0.8, 18.8), label="Bar and service line")
+K.camera((5.1, 12.85), look_at=(8.6, 14.0), label="Prep kitchen", look_z=0.95, fov=80)
+K.camera((5.3, 11.9), look_at=(0.6, 10.2), label="Dining room", look_z=1.1)
+K.camera((9.6, 0.9), look_at=(3.6, 9.0), label="Terrace and facade", look_z=2.0)
+K.stops = [(9.6, 10.0, 130, "Street door"), (5.2, 11.7, 180, "Dining room"), (3.5, 16.5, 100, "Service line"), (5.6, 4.0, 90, "Terrace")]
 K.finish()
-print(f"DESIGN_OK objects={len(bpy.data.objects)} cameras={len(K.cameras)}")
+print("DESIGN_OK")
