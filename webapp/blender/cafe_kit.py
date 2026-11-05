@@ -28,6 +28,8 @@ Typical design.py:
     K.finish()                                 # EEVEE preview settings, selection cleanup
 """
 
+import hashlib
+import json
 import math
 import os
 import random
@@ -101,9 +103,13 @@ def project_uvs(bm, scale=1.0):
 # ----------------------------------------------------------------------------------------------
 
 class Kit:
-    def __init__(self, scene, textures_dir=None, seed=7, collection="Cafe", clear=True):
+    def __init__(self, scene, textures_dir=None, seed=None, collection="Cafe", clear=True):
         self.scene = scene
         self.tex = textures_dir
+        # Seed derived from the plan when not given: the SAME plan is reproducible, but DIFFERENT
+        # plans get different furniture variants/styling — so no two cafés look identical.
+        if seed is None:
+            seed = self._seed_from_scene(scene)
         self.rng = random.Random(seed)
         self.sc = bpy.context.scene
         if clear:
@@ -114,6 +120,14 @@ class Kit:
         self._build_materials()
         self.stops = []   # suggested camera standing points (x, y, yaw_deg, label)
         self.cameras = []
+        # ---- real-asset library (curated GLBs) ----
+        self.style = None                 # designs may set K.style = "modern" etc. to bias variant choice
+        self._here = os.path.dirname(os.path.abspath(__file__))
+        self.assets_root = os.path.join(self._here, "assets")
+        self.models_dir = os.path.join(self.assets_root, "models")
+        self.manifest = self._load_manifest()
+        self._asset_templates = {}        # file -> (entries, size, mn, center) | None
+        self._chosen = {}                 # category -> locked variant entry (one model per café, coherent)
 
     # ---------------- scene plumbing ----------------
     def clear_scene(self):
@@ -269,15 +283,15 @@ class Kit:
         M = self.mats
         self.mat_pbr("plaster", "plaster", "#ece3d3", scale=0.5)
         self.mat_pbr("plaster_warm", "plaster", "#d9c9b0", scale=0.5)
-        self.mat_pbr("oak", "oak", "#d8b98c", scale=0.7)
+        self.mat_pbr("oak", "oak", "#d8b98c", scale=0.7, roughness_mul=0.7)   # satin/oiled, picks up soft reflections
         self.mat_pbr("walnut", "wood", "#8a5a3c", scale=0.9, roughness_mul=0.7)
         self.mat_pbr("walnut_slat", "wood", "#7a4a30", scale=1.8, roughness_mul=0.7)
         self.mat_pbr("lime_plaster", "plaster", "#cdbfa6", scale=0.5)
         self.mat_pbr("tile_white", "marble", "#f4f1ea", scale=0.9, roughness_mul=0.5)
         self.mat_pbr("rattan", "fabric", "#c8a978", scale=4.0)
         self.mat_pbr("terrazzo", "terrazzo", "#ffffff", scale=0.8, roughness_mul=0.5)
-        self.mat_pbr("stone", "concrete", "#b9b4ab", scale=0.25, roughness_mul=0.8)
-        self.mat_pbr("concrete", "concrete", "#a8a39a", scale=0.5)
+        self.mat_pbr("stone", "concrete", "#b9b4ab", scale=0.25, roughness_mul=0.7)
+        self.mat_pbr("concrete", "concrete", "#a8a39a", scale=0.5, roughness_mul=0.72)   # polished concrete sheen
         self.mat_pbr("marble", "marble", "#f2eee6", scale=0.6, roughness_mul=0.4)
         self.mat_plain("boucle", "#d8ccb8", roughness=1.0)
         self.mat_plain("boucle_sage", "#9fae95", roughness=1.0)
@@ -330,6 +344,117 @@ class Kit:
     def M(self, name):
         return self.mats[name]
 
+    # ---------------- real-asset library (curated GLBs) ----------------
+    def _seed_from_scene(self, scene):
+        """Stable hash of the plan geometry: same plan → same seed, different plan → different seed."""
+        try:
+            key = json.dumps([[w.get("a"), w.get("b")] for w in scene.get("walls", [])],
+                             sort_keys=True) + str(len(scene.get("rooms", [])))
+        except Exception:
+            key = str(len(scene.get("walls", [])))
+        return int(hashlib.md5(key.encode()).hexdigest()[:8], 16)
+
+    def _load_manifest(self):
+        path = os.path.join(self.assets_root, "manifest.json")
+        if not os.path.isfile(path):
+            return {}
+        try:
+            data = json.load(open(path))
+            return {k: v for k, v in data.items() if isinstance(v, list)}
+        except Exception as e:  # noqa: BLE001
+            print(f"[cafe_kit] manifest load failed: {e}")
+            return {}
+
+    def _asset_template(self, file):
+        """Import a curated GLB once, capture each mesh's data + baked world matrix and the combined
+        bbox, then unlink the originals. Instances share the mesh data (cheap for many chairs)."""
+        import mathutils
+        if file in self._asset_templates:
+            return self._asset_templates[file]
+        path = os.path.join(self.models_dir, file)
+        if not os.path.isfile(path):
+            print(f"[cafe_kit] asset missing: {path}")
+            self._asset_templates[file] = None
+            return None
+        before = set(bpy.data.objects)
+        try:
+            bpy.ops.import_scene.gltf(filepath=path)
+        except Exception as e:  # noqa: BLE001
+            print(f"[cafe_kit] gltf import failed {file}: {e}")
+            self._asset_templates[file] = None
+            return None
+        imported = [o for o in bpy.data.objects if o not in before]
+        mn = mathutils.Vector((1e9, 1e9, 1e9))
+        mx = mathutils.Vector((-1e9, -1e9, -1e9))
+        entries = []
+        for o in imported:
+            if o.type != "MESH":
+                continue
+            mw = o.matrix_world.copy()
+            entries.append((o.data, mw))
+            for c in o.bound_box:
+                wc = mw @ mathutils.Vector(c)
+                mn = mathutils.Vector((min(mn.x, wc.x), min(mn.y, wc.y), min(mn.z, wc.z)))
+                mx = mathutils.Vector((max(mx.x, wc.x), max(mx.y, wc.y), max(mx.z, wc.z)))
+        for o in imported:
+            for c in list(o.users_collection):
+                c.objects.unlink(o)
+        rec = (entries, mx - mn, mn, (mn + mx) * 0.5) if entries else None
+        self._asset_templates[file] = rec
+        return rec
+
+    def pick_asset(self, category, style=None, variant=None):
+        items = self.manifest.get(category)
+        if not items:
+            return None
+        if variant:
+            for it in items:
+                if it.get("variant") == variant:
+                    return it
+        # one model per category per café: choose once, then reuse — coherent within a building,
+        # different across buildings (via the scene-derived seed).
+        if category in self._chosen:
+            return self._chosen[category]
+        style = style or self.style
+        pool = [it for it in items if style in it.get("style_tags", [])] if style else items
+        chosen = self.rng.choice(pool or items)
+        self._chosen[category] = chosen
+        return chosen
+
+    def place(self, category, at, rot=0.0, style=None, variant=None, fit=None,
+              footprint=None, z=0.0, coll=None, name=None):
+        """Place a curated GLB from the library. Returns the created objects, or None if no asset is
+        available for `category` (callers then fall back to their parametric build). fit 'real' keeps
+        the model's true size; 'contain'/'width' scale it to `footprint` (plan w,d)."""
+        import mathutils
+        it = self.pick_asset(category, style, variant)
+        if not it:
+            return None
+        rec = self._asset_template(it["file"])
+        if not rec:
+            return None
+        entries, size, mn, center = rec
+        fit = fit or it.get("fit", "real")
+        if fit in ("contain", "width") and footprint:
+            sW = footprint[0] / size.x if size.x > 1e-3 else 1.0
+            sD = footprint[1] / size.y if size.y > 1e-3 else 1.0
+            scale = min(sW, sD) if fit == "contain" else sW
+        else:
+            scale = 1.0
+        rotz = math.radians(rot + it.get("forward_deg", 0))
+        M = (mathutils.Matrix.Translation((at[0], at[1], z))
+             @ mathutils.Matrix.Rotation(rotz, 4, "Z")
+             @ mathutils.Matrix.Diagonal((scale, scale, scale, 1.0))
+             @ mathutils.Matrix.Translation((-center.x, -center.y, -mn.z)))
+        g = coll or self.coll
+        objs = []
+        for (data, mw) in entries:
+            o = bpy.data.objects.new(name or f"{category}_{it['variant']}", data)
+            o.matrix_world = M @ mw
+            g.objects.link(o)
+            objs.append(o)
+        return objs
+
     # ---------------- geometry primitives ----------------
     def box(self, name, size, loc, rot=0.0, mat=None, coll=None):
         """Axis box: size (w along x, d along y, h), loc = centre (x, y, z), rot degrees about Z."""
@@ -371,7 +496,7 @@ class Kit:
     def sphere(self, name, r, loc, mat=None, scale=(1, 1, 1), coll=None):
         mesh = bpy.data.meshes.new(name)
         bm = bmesh.new()
-        bmesh.ops.create_icosphere(bm, subdivisions=2, radius=r)
+        bmesh.ops.create_icosphere(bm, subdivisions=3, radius=r)
         bm.normal_update()
         project_uvs(bm)
         bm.to_mesh(mesh)
@@ -505,7 +630,7 @@ class Kit:
                     self.downlights(room["polygon"], ch, coll=arch)
         return arch
 
-    def downlights(self, polygon, z, step=2.2, margin=0.7, power=90.0, coll=None):
+    def downlights(self, polygon, z, step=2.2, margin=0.7, power=34.0, coll=None):
         xs = [p[0] for p in polygon]; ys = [p[1] for p in polygon]
         n = 0
         x = min(xs) + margin
@@ -597,21 +722,26 @@ class Kit:
         r = math.radians(rot)
         def P(dx, dy, dz=0.0):
             return (at[0] + dx * math.cos(r) - dy * math.sin(r), at[1] + dx * math.sin(r) + dy * math.cos(r), on + dz)
-        # machine: matte black body, chrome top rail, brass badge, group heads, cup warmer tray
-        self.box(f"{name}_body", (machine_w, 0.56, 0.42), P(0, 0, 0.21), rot, self.M("matte_black"), g)
-        self.box(f"{name}_top", (machine_w, 0.56, 0.03), P(0, 0, 0.435), rot, self.M("steel"), g)
-        self.box(f"{name}_rail", (machine_w, 0.02, 0.05), P(0, 0.27, 0.47), rot, self.M("steel"), g)
-        for k in range(3):
-            dx = -machine_w / 2 + machine_w * (k + 1) / 4
-            self.cyl(f"{name}_group", 0.045, 0.1, P(dx, -0.2, 0.17), self.M("steel"), 16, coll=g)
-            self.box(f"{name}_handle", (0.02, 0.16, 0.02), P(dx, -0.3, 0.16), rot, self.M("walnut"), g)
-        self.cyl(f"{name}_wand", 0.008, 0.3, P(machine_w / 2 + 0.03, -0.1, 0.1), self.M("steel"), 10, rot=(0, 25, 0), coll=g)
-        self.box(f"{name}_badge", (0.14, 0.01, 0.06), P(0, -0.285, 0.3), rot, self.M("brass"), g)
-        # cups on the warmer
-        a = P(-machine_w / 2 + 0.08, 0.1, 0.45); b = P(machine_w / 2 - 0.08, 0.1, 0.45)
-        self.cup_row((a[0], a[1]), (b[0], b[1]), on + 0.45, offset=0.0, spacing=0.095, margin=0.0, name=f"{name}_cups")
+        # real authored espresso machine from the library; parametric fallback if missing
+        if self.place("espresso", at, rot=rot, z=on, coll=g, name=f"{name}_machine") is not None:
+            half_w = 0.36  # real machine half-width
+            ca = P(-0.22, 0.05, 0.0); cb = P(0.22, 0.05, 0.0)
+            self.cup_row((ca[0], ca[1]), (cb[0], cb[1]), on + 0.32, offset=0.0, spacing=0.1, margin=0.0, name=f"{name}_cups")
+        else:
+            half_w = machine_w / 2
+            self.box(f"{name}_body", (machine_w, 0.56, 0.42), P(0, 0, 0.21), rot, self.M("matte_black"), g)
+            self.box(f"{name}_top", (machine_w, 0.56, 0.03), P(0, 0, 0.435), rot, self.M("steel"), g)
+            self.box(f"{name}_rail", (machine_w, 0.02, 0.05), P(0, 0.27, 0.47), rot, self.M("steel"), g)
+            for k in range(3):
+                dx = -machine_w / 2 + machine_w * (k + 1) / 4
+                self.cyl(f"{name}_group", 0.045, 0.1, P(dx, -0.2, 0.17), self.M("steel"), 16, coll=g)
+                self.box(f"{name}_handle", (0.02, 0.16, 0.02), P(dx, -0.3, 0.16), rot, self.M("walnut"), g)
+            self.cyl(f"{name}_wand", 0.008, 0.3, P(machine_w / 2 + 0.03, -0.1, 0.1), self.M("steel"), 10, rot=(0, 25, 0), coll=g)
+            self.box(f"{name}_badge", (0.14, 0.01, 0.06), P(0, -0.285, 0.3), rot, self.M("brass"), g)
+            a = P(-machine_w / 2 + 0.08, 0.1, 0.45); b = P(machine_w / 2 - 0.08, 0.1, 0.45)
+            self.cup_row((a[0], a[1]), (b[0], b[1]), on + 0.45, offset=0.0, spacing=0.095, margin=0.0, name=f"{name}_cups")
         for k in range(grinders):
-            gx = machine_w / 2 + 0.22 + k * 0.3
+            gx = half_w + 0.22 + k * 0.3
             self.box(f"{name}_grinder{k}", (0.22, 0.3, 0.3), P(gx, -0.05, 0.15), rot, self.M("matte_black"), g)
             self.cyl(f"{name}_hopper{k}", 0.08, 0.2, P(gx, -0.02, 0.3), self.M("dark_glass"), 18, coll=g)
             self.cyl(f"{name}_ring{k}", 0.085, 0.015, P(gx, -0.02, 0.295), self.M("copper"), 18, coll=g)
@@ -631,19 +761,34 @@ class Kit:
         self.box(f"{name}_led", (w - 0.1, 0.02, 0.01), P(0, d / 2 - 0.04, h_base + glass_h - 0.03), rot, self.M("led_cool"), g)
         self.box(f"{name}_shelf", (w - 0.08, d - 0.12, 0.02), P(0, 0, h_base + 0.26), rot, self.M("steel"), g)
         if pastries:
-            for z in (h_base + 0.02, h_base + 0.28):
-                nx_ = max(2, int(w / 0.16)); ny_ = max(1, int(d / 0.26))
-                for i in range(nx_):
-                    for j in range(ny_):
-                        px = -w / 2 + 0.12 + i * (w - 0.24) / max(1, nx_ - 1)
-                        py = -d / 2 + 0.16 + j * (d - 0.32) / max(1, ny_ - 1)
-                        kind = (i + j) % 3
-                        if kind == 0:
-                            self.sphere(f"{name}_bun", 0.045, P(px, py, z + 0.03), self.M("pastry"), (1, 1, 0.7), coll=g)
-                        elif kind == 1:
-                            self.box(f"{name}_slice", (0.09, 0.06, 0.05), P(px, py, z + 0.025), rot + 20, self.M("pastry_dark"), g)
-                        else:
-                            self.cyl(f"{name}_tart", 0.04, 0.03, P(px, py, z), self.M("pastry"), 14, coll=g)
+            foods = self.manifest.get("pastry")
+            if foods:
+                # real food models scattered on the shelves (variety WITHIN the case, not the per-café
+                # lock), spaced so the larger cakes/croissants don't overlap
+                nx_ = max(1, int(w / 0.3)); ny_ = max(1, int(d / 0.34))
+                for z in (h_base + 0.02, h_base + 0.28):
+                    for i in range(nx_):
+                        for j in range(ny_):
+                            px = -w / 2 + 0.2 + i * (w - 0.4) / max(1, nx_ - 1)
+                            py = -d / 2 + 0.2 + j * (d - 0.4) / max(1, ny_ - 1)
+                            wp = P(px, py, z)
+                            it = self.rng.choice(foods)
+                            self.place("pastry", (wp[0], wp[1]), rot=self.rng.uniform(0, 360),
+                                       variant=it["variant"], z=wp[2], coll=g, name=f"{name}_food")
+            else:
+                for z in (h_base + 0.02, h_base + 0.28):
+                    nx_ = max(2, int(w / 0.16)); ny_ = max(1, int(d / 0.26))
+                    for i in range(nx_):
+                        for j in range(ny_):
+                            px = -w / 2 + 0.12 + i * (w - 0.24) / max(1, nx_ - 1)
+                            py = -d / 2 + 0.16 + j * (d - 0.32) / max(1, ny_ - 1)
+                            kind = (i + j) % 3
+                            if kind == 0:
+                                self.sphere(f"{name}_bun", 0.045, P(px, py, z + 0.03), self.M("pastry"), (1, 1, 0.7), coll=g)
+                            elif kind == 1:
+                                self.box(f"{name}_slice", (0.09, 0.06, 0.05), P(px, py, z + 0.025), rot + 20, self.M("pastry_dark"), g)
+                            else:
+                                self.cyl(f"{name}_tart", 0.04, 0.03, P(px, py, z), self.M("pastry"), 14, coll=g)
         return g
 
     def till(self, at, rot=0.0, on=0.95, name="till"):
@@ -728,9 +873,12 @@ class Kit:
 
     # ---------------- seating ----------------
     def chair(self, at, rot=0.0, seat_mat="boucle", frame="oak", name="chair"):
-        """Bentwood-style café chair at `at`. It faces the direction (sin rot, -cos rot): rot=0 faces
-        south (-y), 90 faces east (+x), 180 faces north (+y), -90 faces west (-x)."""
+        """Café chair at `at`. It faces the direction (sin rot, -cos rot): rot=0 faces south (-y),
+        90 faces east (+x), 180 faces north (+y), -90 faces west (-x). Uses a curated real model from
+        the asset library when one exists for category 'chair'; otherwise builds the parametric chair."""
         g = self._collection("Seating")
+        if self.place("chair", at, rot=rot, coll=g, name=name) is not None:
+            return g
         r = math.radians(rot)
         def P(dx, dy, dz=0.0):
             return (at[0] + dx * math.cos(r) - dy * math.sin(r), at[1] + dx * math.sin(r) + dy * math.cos(r), dz)
@@ -775,6 +923,8 @@ class Kit:
 
     def stool(self, at, h=0.75, name="stool"):
         g = self._collection("Seating")
+        if self.place("stool", at, rot=0, coll=g, name=name) is not None:
+            return g
         self.cyl(f"{name}_seat", 0.17, 0.05, (at[0], at[1], h - 0.05), self.M("leather"), 20, coll=g)
         self.cyl(f"{name}_stem", 0.025, h - 0.07, (at[0], at[1], 0.02), self.M("black"), 12, coll=g)
         self.cyl(f"{name}_base", 0.2, 0.02, (at[0], at[1], 0), self.M("black"), 24, coll=g)
@@ -1073,7 +1223,7 @@ class Kit:
         return g
 
     # ---------------- lighting & décor ----------------
-    def pendant(self, at, z_ceiling, drop=0.9, r=0.16, style="opal", power=45.0, name="pendant"):
+    def pendant(self, at, z_ceiling, drop=0.9, r=0.16, style="opal", power=38.0, name="pendant"):
         """Pendant lamp hung from the ceiling at `at`; style opal (glowing dome) or brass (metal shade)."""
         g = self._collection("Lighting")
         z = z_ceiling - drop
@@ -1097,6 +1247,9 @@ class Kit:
 
     def plant(self, at, h=1.1, pot_r=0.22, name="plant"):
         g = self._collection("Props")
+        z = at[2] if len(at) > 2 else 0.0
+        if self.place("plant", (at[0], at[1]), rot=self.rng.uniform(0, 360), z=z, coll=g, name=name) is not None:
+            return g
         self.cyl(f"{name}_pot", pot_r * 0.85, h * 0.32, at + (0,) if len(at) == 2 else at, self.M("pot"), 20, r_top=pot_r, coll=g)
         z0 = (at[2] if len(at) > 2 else 0) + h * 0.32
         for k in range(12):
@@ -1134,7 +1287,7 @@ class Kit:
         self.box(f"{name}_print", (w - 0.08, 0.01, h - 0.08), (at[0] + nx * 0.035, at[1] + ny * 0.035, z), rot, self.M("cream"), g)
         return g
 
-    def lights(self, sun=True, sun_elev=38, sun_az=140, sun_power=3.0, fills=True, sky=True):
+    def lights(self, sun=True, sun_elev=38, sun_az=140, sun_power=5.0, fills=True, sky=True):
         """World (Nishita sky) + sun + a soft ceiling fill in every enclosed room with no lamp."""
         S = self.scene
         world = bpy.data.worlds.get("CafeWorld") or bpy.data.worlds.new("CafeWorld")
@@ -1148,6 +1301,13 @@ class Kit:
                 skyn.sky_type = "NISHITA"
                 skyn.sun_elevation = math.radians(sun_elev)
                 skyn.sun_rotation = math.radians(sun_az)
+                # The sky already carries a bright sun disc; we add our own SUN lamp (below) as the
+                # real, shadow-casting key. Leaving both on gives a double sun with mismatched shadow
+                # direction, so turn the sky's disc off and let the sky be pure ambient fill.
+                try:
+                    skyn.sun_disc = False
+                except Exception:
+                    pass
                 nt.links.new(skyn.outputs["Color"], bg.inputs["Color"])
                 bg.inputs["Strength"].default_value = 1.0
             except Exception:
@@ -1172,7 +1332,10 @@ class Kit:
                 w = max(xs) - min(xs); dd = max(ys) - min(ys)
                 d = bpy.data.lights.new(f"fill_{room['id']}", "AREA")
                 d.shape = "RECTANGLE"; d.size = min(max(w * 0.5, 0.4), 2.2); d.size_y = min(max(dd * 0.5, 0.4), 2.2)
-                d.energy = min(max(w * dd * (8.0 if has_lamp else 18.0), 45.0), 280.0); d.color = kelvin_to_rgb(3000)
+                # Insurance fill only: enough that a windowless/lampless room is never black, but low
+                # enough that daylight + lamps stay the shaping lights. Over-strong fills were the main
+                # cause of the flat, shadowless, "game-engine" look.
+                d.energy = min(max(w * dd * (3.0 if has_lamp else 8.0), 20.0), 110.0); d.color = kelvin_to_rgb(3000)
                 o = bpy.data.objects.new(f"fill_{room['id']}", d)
                 o.location = (cx, cy, ch - 0.08)
                 g.objects.link(o)
@@ -1226,6 +1389,19 @@ class Kit:
                 pass
         try:
             sc.view_settings.view_transform = "AgX"
+        except TypeError:
+            pass
+        # A bare AgX transform desaturates and flattens; a contrast look + a touch of exposure
+        # restores the punch a reference interior shot has. Look names vary by Blender version,
+        # so try the richer ones first and fall back.
+        for _look in ("AgX - Medium High Contrast", "AgX - High Contrast", "Medium High Contrast", "High Contrast", "None"):
+            try:
+                sc.view_settings.look = _look
+                break
+            except TypeError:
+                continue
+        try:
+            sc.view_settings.exposure = 0.3
         except Exception:
             pass
         for o in bpy.context.selected_objects:

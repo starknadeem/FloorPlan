@@ -94,7 +94,7 @@ K.string_lights((0.8, 1.0), (10.1, 1.0), 2.9, n=16, name="festoon2")
 K.counter_run((8.875, 15.5), (8.875, 13.45), depth=0.65, h=0.9, top="steel", front="steel", led_kick=False, name="prep_run")
 
 # ---- lighting + cameras ---------------------------------------------------------------------
-K.lights(sun_elev=34, sun_az=150, sun_power=2.6)
+K.lights(sun_elev=34, sun_az=150, sun_power=5.0)
 K.camera((9.3, 11.0), look_at=(2.0, 16.0), label="Arriving from the street door", look_z=1.5)
 K.camera((3.7, 15.2), look_at=(0.8, 19.6), label="Order corridor and bar")
 K.camera((2.9, 12.0), look_at=(8.6, 12.9), label="Dining room and banquette")

@@ -1,0 +1,77 @@
+{
+  "_comment": "Curated real GLB assets replacing parametric primitives. Each normalized by curate_asset.py: base at z=0, centred in XY, faces -Y at forward_deg=0 (matches cafe_kit chair() convention). fit='real' keeps real-world size; 'contain'/'width' scale to a plan footprint. Sources are CC0 Poly Haven (+ custom Blender-authored pieces). cafe_kit Kit.place() picks ONE variant per category per café (coherent within a building, different across buildings via the scene-derived seed).",
+  "chair": [
+    {
+      "variant": "dining_leather",
+      "file": "chair/dining_leather.glb",
+      "footprint": [0.433, 0.576],
+      "height": 0.973,
+      "forward_deg": 0,
+      "fit": "real",
+      "style_tags": ["modern", "industrial-chic", "cozy-warm"],
+      "tris": 6499,
+      "source": "polyhaven:dining_chair_02",
+      "license": "CC0"
+    },
+    {
+      "variant": "dining_light",
+      "file": "chair/dining_light.glb",
+      "footprint": [0.432, 0.54],
+      "height": 0.956,
+      "forward_deg": 0,
+      "fit": "real",
+      "style_tags": ["scandinavian", "cozy-warm", "modern"],
+      "tris": 724,
+      "source": "polyhaven:painted_wooden_chair_01",
+      "license": "CC0"
+    }
+  ],
+  "stool": [
+    {
+      "variant": "bar_wood",
+      "file": "stool/bar_wood.glb",
+      "footprint": [0.483, 0.485],
+      "height": 0.75,
+      "forward_deg": 0,
+      "fit": "real",
+      "style_tags": ["industrial-chic", "cozy-warm", "modern"],
+      "tris": 5000,
+      "source": "polyhaven:bar_chair_round_01",
+      "license": "CC0"
+    }
+  ],
+  "plant": [
+    {
+      "variant": "pot_tall",
+      "file": "plant/pot_tall.glb",
+      "footprint": [0.588, 0.626],
+      "height": 1.349,
+      "forward_deg": 0,
+      "fit": "real",
+      "style_tags": ["modern", "scandinavian", "industrial-chic", "cozy-warm"],
+      "tris": 6999,
+      "source": "polyhaven:potted_plant_01",
+      "license": "CC0"
+    },
+    {
+      "variant": "pot_low",
+      "file": "plant/pot_low.glb",
+      "footprint": [0.701, 0.656],
+      "height": 0.842,
+      "forward_deg": 0,
+      "fit": "real",
+      "style_tags": ["modern", "scandinavian", "industrial-chic", "cozy-warm"],
+      "tris": 7000,
+      "source": "polyhaven:potted_plant_02",
+      "license": "CC0"
+    }
+  ],
+  "espresso": [
+    {"variant": "espresso_modern", "file": "equipment/espresso_modern.glb", "footprint": [0.72, 0.636], "height": 0.52, "forward_deg": 0, "fit": "real", "style_tags": ["modern", "industrial-chic", "scandinavian", "cozy-warm"], "tris": 1808, "source": "custom:blender-authored", "license": "CC0"}
+  ],
+  "pastry": [
+    {"variant": "croissant", "file": "pastry/croissant.glb", "footprint": [0.2, 0.076], "height": 0.062, "forward_deg": 0, "fit": "real", "style_tags": ["any"], "tris": 1990, "source": "polyhaven:croissant", "license": "CC0"},
+    {"variant": "carrot_cake", "file": "pastry/carrot_cake.glb", "footprint": [0.225, 0.226], "height": 0.096, "forward_deg": 0, "fit": "real", "style_tags": ["any"], "tris": 2500, "source": "polyhaven:carrot_cake", "license": "CC0"},
+    {"variant": "choc_cake", "file": "pastry/choc_cake.glb", "footprint": [0.243, 0.24], "height": 0.078, "forward_deg": 0, "fit": "real", "style_tags": ["any"], "tris": 2500, "source": "polyhaven:strawberry_chocolate_cake", "license": "CC0"}
+  ]
+}
