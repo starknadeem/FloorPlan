@@ -40,7 +40,7 @@ K.condiment_station((4.285, 17.3), rot=90)
 K.track_light((3.8, 14.8), (3.8, 19.2), CEIL - 0.3, heads=4, aim=(2.0, 17.0))
 
 # ---- appliances from the plan's legend, as detailed models --------------------------------------
-K.plan_equipment()
+K.plan_equipment(vanity="oak_smoked")   # also dresses the prep room and WC
 
 # ---- dining ---------------------------------------------------------------------------------------
 K.banquette((0.125, 12.1), (0.125, 9.35), depth=0.6, seat_mat="velvet:#8a5a3c", panel=None, cushions="channel")

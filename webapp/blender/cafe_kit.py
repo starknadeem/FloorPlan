@@ -183,6 +183,10 @@ class Kit:
         self._runs = []       # counters/back bars, so equipment can sit on them
         self._occupied = []   # (x, y, radius) of placed equipment
         self._canopies = []   # (x, y, radius) of trees
+        self._faces_cache = {}
+        self._face_used = {}
+        self._finished = set()     # rooms a design already finished by hand
+        self._plan_done = False
         self.sc = bpy.context.scene
         if clear:
             self.clear_scene()
@@ -770,7 +774,8 @@ class Kit:
                 self.slab(f"ceiling_roof_{room['id']}", room["polygon"], max(top, ch + 0.2), self.M("roof"), coll=arch)
                 if downlights:
                     work = cat in ("preparation", "kitchen", "storage") or str(cat).startswith("wc")
-                    self.downlights(room["polygon"], ch, coll=arch, power=55.0 if work else 28.0, kelvin=4000 if work else 3000)
+                    area = self._room_area(room)
+                    self.downlights(room["polygon"], ch, coll=arch, power=(min(55.0, area * 3.2) if work else min(28.0, 6.0 + area * 2.5)), kelvin=4000 if work else 3000)
         self._site(ground, context, arch)
         return arch
 
@@ -960,6 +965,7 @@ class Kit:
         """Dress every wall of a room in one call. target: "all", a room id or a category. finish: wall material or "#hex".
         dado: lower-wall material (zellige, subway, paint or timber) up to dado_h; dado_style "plain" | "panel" (raised panel moulding)
         | "beadboard". rail: chair-rail material. crown: cornice material. skirting: tall skirting material."""
+        self._finished.add(target)
         fs = self.faces(target)
         if only_longest and fs:
             fs = [max(fs, key=lambda f: f["len"])]
@@ -2496,12 +2502,127 @@ class Kit:
                 return tt, x, y
         return None
 
-    def plan_equipment(self, skip=()):
-        """Put every appliance from the plan's equipment legend into the building, at its plan position, using detailed models:
-        items falling inside a counter sit on it (or become an under-counter unit in its front); the rest stand on the floor against
-        their wall. Call AFTER counter_run/back_bar/espresso_station. Never floats anything. Returns a report dict."""
+    # ---- wall-aware placement: plan rotations are unreliable (the same toilet parses as 0, 90 or 180), walls are not ----
+    def _room_faces(self, rid):
+        if rid not in self._faces_cache:
+            self._faces_cache[rid] = self.faces(rid)
+        return self._faces_cache[rid]
+
+    def _F(self, f, s, off=0.0, z=0.0):
+        """World point on a face: s metres along it, off metres into the room, height z."""
+        ux, uy = (f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]
+        return (f["a"][0] + ux * s - uy * off, f["a"][1] + uy * s + ux * off, z)
+
+    def _face_rot(self, f):
+        """Rotation that makes a -Y-fronted model face into the room (its back to this wall)."""
+        ux, uy = (f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]
+        nx, ny = -uy, ux
+        return math.degrees(math.atan2(nx, -ny))
+
+    def _face_blocked(self, f, height, depth=0.7):
+        """Intervals of a face that cannot take furniture: doors (with swing room), windows lower than the item, counters, placed items."""
+        out = []
+        for (g0, g1, gz0, gz1) in f["openings"]:
+            if gz0 < 0.05:
+                out.append((g0 - 0.18, g1 + 0.18))
+            elif gz0 < height:
+                out.append((g0, g1))
+        key = (f["wall"], f["room"], round(f["a"][0], 2), round(f["a"][1], 2))
+        out += self._face_used.get(key, [])
+        ux, uy = (f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]
+        for R in self._runs:
+            pts = [R["a"], R["b"], (R["a"][0] + R["n"][0] * R["depth"], R["a"][1] + R["n"][1] * R["depth"]), (R["b"][0] + R["n"][0] * R["depth"], R["b"][1] + R["n"][1] * R["depth"])]
+            ss, nn = [], []
+            for p_ in pts:
+                dx, dy = p_[0] - f["a"][0], p_[1] - f["a"][1]
+                ss.append(dx * ux + dy * uy)
+                nn.append(-dx * uy + dy * ux)
+            if min(nn) < depth and max(nn) > -0.05 and max(ss) > 0 and min(ss) < f["len"]:
+                out.append((min(ss), max(ss)))
+        return sorted(out)
+
+    def _mark_face(self, f, s0, s1):
+        key = (f["wall"], f["room"], round(f["a"][0], 2), round(f["a"][1], 2))
+        self._face_used.setdefault(key, []).append((s0, s1))
+
+    def _free_spot(self, f, want, width, height):
+        """Nearest position to `want` along a face where `width` fits; None if the wall is full."""
+        half = width / 2
+        lo, hi = half + 0.02, f["len"] - half - 0.02
+        if hi < lo:
+            return None
+        blocked = self._face_blocked(f, height)
+        cands = [min(max(want, lo), hi)]
+        for (b0, b1) in blocked:
+            cands += [b0 - half - 0.01, b1 + half + 0.01]
+        best = None
+        for c in cands:
+            if c < lo or c > hi or any(c + half > b0 and c - half < b1 for b0, b1 in blocked):
+                continue
+            if best is None or abs(c - want) < abs(best - want):
+                best = c
+        return best
+
+    def _against_wall(self, x, y, width, depth, height, reach=1.6, clear=0.6):
+        """Choose the nearest free wall for an item at plan point (x, y) that leaves `clear` metres of usable floor in front
+        (a toilet in a 1 m wide WC goes on the end wall, facing down the room): returns (face, s), or None."""
+        room = self._room_at(x, y)
+        if not room or not (room.get("ceilingHeight") or 0) > 0:
+            return None
+        ranked = []
+        for f in self._room_faces(room["id"]):
+            ux, uy = (f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]
+            dx, dy = x - f["a"][0], y - f["a"][1]
+            s_ = max(0.0, min(f["len"], dx * ux + dy * uy))
+            ranked.append((math.hypot(x - (f["a"][0] + ux * s_), y - (f["a"][1] + uy * s_)), s_, f))
+        for lim in (reach, 99.0):        # nearest suitable wall first, then any wall in the room
+            for dist, s_, f in sorted(ranked, key=lambda r: r[0]):
+                if dist > lim:
+                    break
+                spot = self._free_spot(f, s_, width, height)
+                if spot is None:
+                    continue
+                fx, fy, _ = self._F(f, spot, depth + clear)
+                inside = self._room_at(fx, fy)
+                if inside and inside["id"] == room["id"]:
+                    return f, spot
+        return None
+
+    def _place_on_wall(self, lib, x, y, name, variant=None):
+        it = self.pick_asset(lib, variant=variant)
+        hit = self._against_wall(x, y, it["footprint"][0] + 0.03, it["footprint"][1], it["height"])
+        if not hit:
+            return None
+        f, s_ = hit
+        px, py, _ = self._F(f, s_, it["footprint"][1] / 2 + 0.015)
+        self._mark_face(f, s_ - it["footprint"][0] / 2 - 0.015, s_ + it["footprint"][0] / 2 + 0.015)
+        self._occupied.append((px, py, max(it["footprint"]) * 0.5))
+        self.place(lib, (px, py), rot=self._face_rot(f), coll=self._collection("Equipment"), name=name, variant=variant)
+        return f, s_, it
+
+    def _nearest_run(self, x, y, room_id, reach=2.5):
+        """Worktop in the same room closest to a plan point."""
+        best, bt, bd = None, 0.0, reach
+        for R in self._runs:
+            mx, my = R["a"][0] + R["u"][0] * R["L"] / 2 + R["n"][0] * R["depth"] / 2, R["a"][1] + R["u"][1] * R["L"] / 2 + R["n"][1] * R["depth"] / 2
+            rr = self._room_at(mx, my)
+            if not rr or rr["id"] != room_id:
+                continue
+            t = max(0.0, min(R["L"], (x - R["a"][0]) * R["u"][0] + (y - R["a"][1]) * R["u"][1]))
+            d = math.hypot(x - (R["a"][0] + R["u"][0] * t), y - (R["a"][1] + R["u"][1] * t))
+            if d < bd:
+                best, bt, bd = R, t, d
+        return best, bt
+
+    def plan_equipment(self, skip=(), dress=True, wc_finish=None, wc_dado=None, vanity="auto", kitchen_finish=None):
+        """Put every appliance from the plan's legend into the building with detailed models, then dress the washrooms and kitchens
+        (vanity, backlit mirror, grab rails, accessories; steel worktops, shelves, hood, task light, cookware). Items that stand on the floor
+        go back-to-wall facing the room, wherever the plan put them. Items inside a counter sit on it or become under-counter units. Never
+        floats anything. Call AFTER counter_run/back_bar/espresso_station. Optional style: wc_finish, wc_dado, vanity, kitchen_finish (materials)."""
+        self._plan_done = True
         placed, skipped = [], []
-        toilet_rooms = set()
+        toilets, basins, stoves = {}, {}, []
+        jobs = []
         for f in self.scene.get("fixtures", []):
             cat = f.get("category")
             nm = (f.get("name") or f.get("label") or "").lower()
@@ -2509,16 +2630,12 @@ class Kit:
                 continue
             x, y = f["position"][:2]
             fw, fd = (f.get("footprint") or [0.5, 0.5])[:2]
-            rot = (f.get("rotation") or 0.0) + 180.0
-            lib = None
-            mode = "floor"
+            room = self._room_at(x, y) or {}
+            rcat = str(room.get("category", ""))
+            lib, mode = None, "floor"
             if "toilet" in nm or cat == "toilet":
-                rid = (self._room_at(x, y) or {}).get("id")
-                if rid in toilet_rooms:     # parsed plans can list the same WC fixture twice
-                    continue
-                toilet_rooms.add(rid)
                 lib = "toilet"
-            elif cat == "sink" and ("washbasin" in nm or "wash basin" in nm or "hand wash" in nm or (self._room_at(x, y) or {}).get("category", "").startswith("wc")):
+            elif cat == "sink" and ("basin" in nm or "hand wash" in nm or rcat.startswith("wc")):
                 lib = "basin"
             elif cat == "sink":
                 lib, mode = "sink", "bench"
@@ -2536,7 +2653,8 @@ class Kit:
                 elif any(k in nm for k in ("stove", "range", "hob", "cook")):
                     lib = "stove"
                 else:
-                    lib = "stove" if not any(p.startswith("stove") for p in placed) else "oven"
+                    lib = "stove" if not stoves else "oven"
+                    stoves.append(1)
             elif "microwave" in nm:
                 lib, mode = "microwave", "top"
             elif "toaster" in nm:
@@ -2551,57 +2669,452 @@ class Kit:
                 lib, mode = "boiler", "top"
             elif cat == "grinder" and not getattr(self, "_has_grinders", False):
                 lib, mode = "grinder", "top"
-            if not lib or lib in skip:
+            if lib and lib not in skip and self.pick_asset(lib):
+                jobs.append((lib, mode, x, y, room, rcat))
+        # 1. floor-standing items take their wall spots first
+        hoods = []
+        for lib, mode, x, y, room, rcat in jobs:
+            if mode == "top":
                 continue
-            it = self.pick_asset(lib)
-            if not it:
-                skipped.append(f"{lib}:no-model")
-                continue
-            half = it["footprint"][0] / 2
-            R, t = self._run_at(x, y)
-            if mode in ("top", "under") or (mode == "bench" and R):
-                if R is None:
-                    if mode == "top":
-                        skipped.append(f"{lib}@({x:.1f},{y:.1f}):no-counter")
-                        continue
-                    self._occupied.append((x, y, half))
-                    self.equip(lib, (x, y), rot=rot, name=f"{lib}_{len(placed)}")
-                    placed.append(lib)
+            rid = room.get("id")
+            if lib == "toilet":
+                area = self._room_area(room)
+                if toilets.get(rid, 0) >= max(1, int(area / 3.5)):   # parsed plans list the same toilet twice
                     continue
-                if lib == "sink":   # inset basin in the worktop rather than a free-standing bench
+                toilets[rid] = toilets.get(rid, 0) + 1
+            if lib == "basin":
+                basins.setdefault(rid, []).append((x, y))
+                continue
+            R, t = self._run_at(x, y)
+            if R and mode in ("under", "bench"):
+                it = self.pick_asset(lib)
+                if lib == "sink":
                     free = self._free_on_run(R, t, 0.22)
                     if free:
                         self._inset_sink(R, free[0], f"sink_{len(placed)}")
                         placed.append("sink_inset")
                     continue
-                free = self._free_on_run(R, t, half)
+                free = self._free_on_run(R, t, it["footprint"][0] / 2)
                 if not free:
                     skipped.append(f"{lib}:run-full")
                     continue
                 tt, px, py = free
                 fx, fy = R["front"]
-                r2 = math.degrees(math.atan2(fx, -fy))
-                self._occupied.append((px, py, half))
-                if mode == "under":
-                    D = it["footprint"][1]
-                    # front of the unit just proud of the counter's working face
-                    side = -1 if R["front"] == R["n"] else 1
-                    edge = R["depth"] if side == -1 else 0.0
-                    bx_ = R["a"][0] + R["u"][0] * tt + R["n"][0] * (edge + side * (D / 2 - 0.012))
-                    by_ = R["a"][1] + R["u"][1] * tt + R["n"][1] * (edge + side * (D / 2 - 0.012))
-                    self.place(lib, (bx_, by_), rot=r2, coll=self._collection("Equipment"), name=f"{lib}_{len(placed)}")
-                else:
-                    self.place(lib, (px, py), rot=r2, z=R["h"], coll=self._collection("Equipment"), name=f"{lib}_{len(placed)}")
+                self._occupied.append((px, py, it["footprint"][0] / 2))
+                sd = -1 if R["front"] == R["n"] else 1
+                edge = R["depth"] if sd == -1 else 0.0
+                D = it["footprint"][1]
+                self.place(lib, (R["a"][0] + R["u"][0] * tt + R["n"][0] * (edge + sd * (D / 2 - 0.012)), R["a"][1] + R["u"][1] * tt + R["n"][1] * (edge + sd * (D / 2 - 0.012))), rot=math.degrees(math.atan2(fx, -fy)), coll=self._collection("Equipment"), name=f"{lib}_{len(placed)}")
                 placed.append(lib)
+                continue
+            hit = self._place_on_wall(lib, x, y, f"{lib}_{len(placed)}")
+            if hit:
+                placed.append(lib)
+                if lib in ("stove", "oven"):
+                    hoods.append(hit)
             else:
-                if any(math.hypot(x - ox, y - oy) < half * 0.7 + orad * 0.7 for ox, oy, orad in self._occupied):
-                    skipped.append(f"{lib}@({x:.1f},{y:.1f}):overlap")
+                skipped.append(f"{lib}@({x:.1f},{y:.1f}):no-wall")
+        # 2. dress the rooms: worktops give counter-top items somewhere real to sit
+        if dress:
+            for room in self.scene.get("rooms", []):
+                cat = str(room.get("category", ""))
+                if not (room.get("ceilingHeight") or 0) > 0:
                     continue
-                self.equip(lib, (x, y), rot=rot, name=f"{lib}_{len(placed)}")
-                placed.append(lib)
+                if cat in ("preparation", "kitchen"):
+                    self.dress_kitchen(room, finish=kitchen_finish, hoods=[h for h in hoods if h[0]["room"] == room["id"]])
+                elif cat == "storage":
+                    self.dress_storage(room)
+        # 3. things that sit on counters
+        for lib, mode, x, y, room, rcat in jobs:
+            if mode != "top":
+                continue
+            it = self.pick_asset(lib)
+            half = it["footprint"][0] / 2
+            R, t = self._run_at(x, y)
+            if not R and room.get("id"):
+                R, t = self._nearest_run(x, y, room["id"])
+            if not R:
+                skipped.append(f"{lib}@({x:.1f},{y:.1f}):no-counter")
+                continue
+            free = self._free_on_run(R, t, half)
+            if not free:
+                skipped.append(f"{lib}:run-full")
+                continue
+            tt, px, py = free
+            fx, fy = R["front"]
+            self._occupied.append((px, py, half))
+            self.place(lib, (px, py), rot=math.degrees(math.atan2(fx, -fy)), z=R["h"], coll=self._collection("Equipment"), name=f"{lib}_{len(placed)}")
+            placed.append(lib)
+        # 4. washrooms last: they fit round whatever the plan fixed
+        if dress:
+            for room in self.scene.get("rooms", []):
+                if str(room.get("category", "")).startswith("wc") and (room.get("ceilingHeight") or 0) > 0:
+                    self.dress_washroom(room, basins.get(room["id"], []), has_toilet=toilets.get(room["id"], 0) > 0, finish=wc_finish, dado=wc_dado, vanity=vanity)
         report = {"placed": placed, "skipped": skipped}
         print(f"PLAN_EQUIPMENT placed={len(placed)} {sorted(set(placed))} skipped={skipped}", flush=True)
         return report
+
+    def _room_area(self, room):
+        p_ = room["polygon"]
+        return abs(sum(p_[i][0] * p_[(i + 1) % len(p_)][1] - p_[(i + 1) % len(p_)][0] * p_[i][1] for i in range(len(p_)))) / 2
+
+    # ---------------- washroom ----------------
+    def _style_pick(self, table, default):
+        return table.get(self.style, default)
+
+    def dress_washroom(self, room, basin_points=(), has_toilet=True, finish=None, dado=None, vanity="auto"):
+        """A finished washroom: tiled walls, vanity with vessel basin and wall tap, backlit mirror, towel and paper, soap, plant, and grab rails in accessible rooms."""
+        rid = room["id"]
+        ch = room.get("ceilingHeight") or 2.5
+        g = self._collection("Washroom")
+        tile = {"japandi": "subway:#e6e0d3", "scandinavian": "subway:#f0ede6", "industrial": "subway:#2b2b2d", "brutalist": "concrete", "bistro": "hex_tile:#ece6d8", "deco": "zellige:#1f4a40",
+                "midcentury": "zellige:#2f6668", "retro": "zellige:#b0562f", "mediterranean": "zellige:#2e6f73", "biophilic": "zellige:#3f6b52", "modern": "marble_white", "cozy": "zellige:#6d5a4a"}
+        top_mat = {"japandi": "limestone", "scandinavian": "marble_white", "industrial": "concrete_dark", "brutalist": "concrete_dark", "bistro": "marble_white", "deco": "marble_nero",
+                   "midcentury": "terrazzo", "retro": "terrazzo", "mediterranean": "limestone", "biophilic": "marble_white", "modern": "marble_nero", "cozy": "limestone"}
+        body_mat = {"japandi": "oak_pale", "scandinavian": "oak_pale", "industrial": "black_steel", "brutalist": "ebony", "bistro": "mahogany", "deco": "mahogany", "midcentury": "walnut",
+                    "retro": "walnut", "mediterranean": "oak", "biophilic": "ash", "modern": "ebony", "cozy": "oak"}
+        metal = {"deco": "brass", "bistro": "brass", "midcentury": "brass", "cozy": "brass", "retro": "brass", "mediterranean": "brass", "industrial": "black_steel", "brutalist": "black_steel", "modern": "chrome"}.get(self.style, "chrome")
+        if rid not in self._finished and (room.get("category") not in self._finished):
+            self.finish_walls(rid, finish=finish or "#e9e4d9", dado=dado or tile.get(self.style, "subway:#f0ede6"), dado_h=1.45, rail=metal if metal != "chrome" else None, crown=None, skirting=None)
+        fs = sorted(self._room_faces(rid), key=lambda f: -f["len"])
+        if not fs:
+            return
+        if not has_toilet:
+            cx, cy = _centroid(room["polygon"])
+            self._place_on_wall("toilet", cx, cy, f"toilet_{rid}")
+        # vanity: wall nearest the plan's basin, else the longest free wall
+        bx, by = (basin_points[0] if basin_points else _centroid(room["polygon"]))
+        W = min(1.1, max(0.6, min(max(p[0] for p in room["polygon"]) - min(p[0] for p in room["polygon"]), max(p[1] for p in room["polygon"]) - min(p[1] for p in room["polygon"])) * 0.5))
+        hit = self._against_wall(bx, by, W, 0.5, 0.9, reach=9.0)
+        D_ = 0.48
+        if not hit:     # narrow room: a compact hand basin in the wall's free stretch
+            W, D_ = 0.5, 0.26
+            hit = self._against_wall(bx, by, W, D_, 0.9, reach=9.0, clear=0.4)
+        if hit:
+            f, s_ = hit
+            self._mark_face(f, s_ - W / 2, s_ + W / 2)
+            self._vanity(f, s_, W, top_mat.get(self.style, "marble_white"), body_mat.get(self.style, "oak") if vanity == "auto" else vanity, metal, g, rid, D=D_)
+        # accessories on the wall beside the toilet, grab rails where the room is accessible
+        ts = [o for (o, file, i) in self._placed if file.startswith("wc/toilet") and (self._room_at(o.matrix_world.translation.x, o.matrix_world.translation.y) or {}).get("id") == rid]
+        disabled = "disabled" in str(room.get("category")) or "accessible" in str(room.get("name", "")).lower()
+        for t_ in ts:
+            tx, ty = t_.matrix_world.translation.x, t_.matrix_world.translation.y
+            near = sorted(fs, key=lambda f: self._dist_face(f, tx, ty))
+            back = near[0]
+            sidef = next((f for f in near[1:] if abs(self._face_dot(f, back)) < 0.3 and self._dist_face(f, tx, ty) < 1.6), None)
+            if sidef:
+                ss = self._proj(sidef, tx, ty)
+                ss = min(max(ss, 0.2), sidef["len"] - 0.2)
+                px, py, _ = self._F(sidef, ss, 0.05, 0.72)
+                self.rod(f"{rid}_rollarm", self._F(sidef, ss, 0.0, 0.72), self._F(sidef, ss, 0.1, 0.72), 0.006, self.M(metal), 8, g)
+                self.rod(f"{rid}_roll", self._F(sidef, ss - 0.055, 0.075, 0.72), self._F(sidef, ss + 0.055, 0.075, 0.72), 0.05, self.M("white"), 20, g)
+                if disabled:
+                    a_, b_ = self._F(sidef, ss - 0.35, 0.05, 0.82), self._F(sidef, ss + 0.4, 0.05, 0.82)
+                    self.rod(f"{rid}_grab", a_, b_, 0.016, self.M(metal), 12, g)
+                    for e_ in (ss - 0.35, ss + 0.4):
+                        self.rod(f"{rid}_grab_post", self._F(sidef, e_, 0.0, 0.82), self._F(sidef, e_, 0.05, 0.82), 0.012, self.M(metal), 8, g)
+            bs = self._proj(back, tx, ty)
+            if disabled:
+                for sg in (-0.33, 0.33):   # fold-down rails either side of the seat
+                    b0, b1 = self._F(back, bs + sg, 0.03, 0.78), self._F(back, bs + sg, 0.72, 0.78)
+                    self.rod(f"{rid}_fold", b0, b1, 0.016, self.M(metal), 12, g)
+            # brush holder
+            self.lathe(f"{rid}_brush", [(0, 0), (0.05, 0), (0.05, 0.14), (0.042, 0.14), (0.012, 0.16), (0.008, 0.42), (0, 0.42)], self._F(back, bs + 0.42 if bs + 0.42 < back["len"] - 0.1 else bs - 0.42, 0.1, 0.0), self.M(metal), 16, g)
+        # warm soft ceiling panel so the room is flattering, not flat
+        cx, cy = _centroid(room["polygon"])
+        d = bpy.data.lights.new(f"fill_{rid}_panel", "AREA")
+        d.shape = "RECTANGLE"; d.size = 0.9; d.size_y = 0.9; d.energy = min(26.0, self._room_area(room) * 1.6); d.color = kelvin_to_rgb(3300)
+        o = bpy.data.objects.new(f"fill_{rid}_panel", d)
+        o.location = (cx, cy, ch - 0.03)
+        self._collection("Lighting").objects.link(o)
+        return g
+
+    def _dist_face(self, f, x, y):
+        s_ = self._proj(f, x, y)
+        px, py, _ = self._F(f, s_)
+        return math.hypot(x - px, y - py)
+
+    def _proj(self, f, x, y):
+        ux, uy = (f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]
+        return max(0.0, min(f["len"], (x - f["a"][0]) * ux + (y - f["a"][1]) * uy))
+
+    def _face_dot(self, f, h):
+        return ((f["b"][0] - f["a"][0]) * (h["b"][0] - h["a"][0]) + (f["b"][1] - f["a"][1]) * (h["b"][1] - h["a"][1])) / (f["len"] * h["len"])
+
+    def _vanity(self, f, s_, W, top, body, metal, g, rid, D=0.48):
+        ang = math.degrees(math.atan2(f["b"][1] - f["a"][1], f["b"][0] - f["a"][0]))
+        vs_ = 0.62 if D < 0.4 else 1.0   # compact basin scale
+        Pc = self._F(f, s_, D / 2)
+        self.box(f"{rid}_vanity", (W, D, 0.34), (Pc[0], Pc[1], 0.66), ang, self.M(body), g, bevel=0.006)
+        for sg in (-W / 4, W / 4):
+            pf = self._F(f, s_ + sg, D + 0.002)
+            self.box(f"{rid}_drawer", (W / 2 - 0.012, 0.008, 0.3), (pf[0], pf[1], 0.66), ang, self.M(body), g, bevel=0.003)
+            ph = self._F(f, s_ + sg, D + 0.02)
+            ph0, ph1 = self._F(f, s_ + sg - 0.09, D + 0.02, 0.76), self._F(f, s_ + sg + 0.09, D + 0.02, 0.76)
+            self.rod(f"{rid}_pull", ph0, ph1, 0.006, self.M(metal), 8, g)
+        self.box(f"{rid}_top", (W + 0.03, D + 0.02, 0.035), (Pc[0], Pc[1], 0.848), ang, self.M(top), g, bevel=0.005)
+        self.box(f"{rid}_splash", (W + 0.03, 0.015, 0.1), self._F(f, s_, 0.008, 0.915), ang, self.M(top), g, bevel=0.003)
+        # vessel basin, wall spout + lever
+        vx = self._F(f, s_, D * 0.52)
+        self.lathe(f"{rid}_vessel", [(0, 0), (0.09 * vs_, 0), (0.17 * vs_, 0.08), (0.185 * vs_, 0.13), (0.178 * vs_, 0.13), (0.16 * vs_, 0.085), (0.08 * vs_, 0.018), (0, 0.012)], (vx[0], vx[1], 0.866), self.M("cup"), 40, g)
+        self.rod(f"{rid}_spout", self._F(f, s_, 0.0, 1.1), self._F(f, s_, D * 0.4, 1.08), 0.009, self.M(metal), 10, g)
+        self.rod(f"{rid}_lever", self._F(f, s_ + 0.12, 0.0, 1.1), self._F(f, s_ + 0.12, 0.08, 1.1), 0.007, self.M(metal), 8, g)
+        # backlit mirror with real light
+        r_ = min(0.38, W * 0.42)
+        mz = 1.52
+        self.rod(f"{rid}_halo", self._F(f, s_, 0.004, mz), self._F(f, s_, 0.012, mz), r_ + 0.012, self.M("led"), 48, g)
+        self.rod(f"{rid}_mirror", self._F(f, s_, 0.012, mz), self._F(f, s_, 0.026, mz), r_, self.M("mirror"), 48, g)
+        lp = self._F(f, s_, 0.13, mz + r_ + 0.12)
+        d = bpy.data.lights.new(f"fill_{rid}_mirror", "POINT")
+        d.energy = 18.0 if D > 0.4 else 7.0; d.color = kelvin_to_rgb(3200); d.shadow_soft_size = 0.2
+        o = bpy.data.objects.new(f"fill_{rid}_mirror", d)
+        o.location = lp
+        self._collection("Lighting").objects.link(o)
+        if D < 0.4:     # no room for styling on a compact basin, keep it clean
+            return
+        # towels, soap, a small plant
+        soap = self._F(f, s_ + W / 2 - 0.11, 0.12)
+        self.lathe(f"{rid}_soap", [(0, 0), (0.032, 0), (0.034, 0.01), (0.034, 0.13), (0.012, 0.15), (0.009, 0.19), (0.03, 0.2), (0.03, 0.208), (0, 0.208)], (soap[0], soap[1], 0.866), self.M("dark_glass"), 14, g)
+        tw = self._F(f, s_ - W / 2 + 0.13, 0.15)
+        for k in range(3):
+            self.box(f"{rid}_towel", (0.17, 0.13, 0.024), (tw[0], tw[1], 0.879 + k * 0.026), ang + k * 2, self.M("linen:#e8e1d2"), g, bevel=0.01)
+        side = s_ + W / 2 + 0.34 if s_ + W / 2 + 0.5 < f["len"] else s_ - W / 2 - 0.34
+        if 0.15 < side < f["len"] - 0.15 and not any(side > b0 and side < b1 for b0, b1 in self._face_blocked(f, 1.2)):
+            a_, b_ = self._F(f, side - 0.2, 0.06, 1.15), self._F(f, side + 0.2, 0.06, 1.15)
+            self.rod(f"{rid}_rail", a_, b_, 0.009, self.M(metal), 10, g)
+            for e_ in (side - 0.2, side + 0.2):
+                self.rod(f"{rid}_railpost", self._F(f, e_, 0.0, 1.15), self._F(f, e_, 0.06, 1.15), 0.008, self.M(metal), 8, g)
+            p0, p1 = self._F(f, side, 0.066, 0.92), 0
+            self.box(f"{rid}_handtowel", (0.26, 0.016, 0.46), (p0[0], p0[1], 0.93), ang, self.M("linen:#d7cdb8"), g, bevel=0.005)
+        pv = self._F(f, s_ + W / 2 - 0.2, 0.22)
+        self.lathe(f"{rid}_vase", [(0, 0), (0.035, 0), (0.05, 0.05), (0.04, 0.11), (0.024, 0.13), (0.028, 0.15), (0.02, 0.15), (0, 0.1)], (pv[0], pv[1], 0.866), self.M("pot"), 18, g)
+        self._leaf_cloud(f"{rid}_sprig", (pv[0], pv[1], 1.1), (0.09, 0.09, 0.11), 70, 0.05, coll=g)
+
+    # ---------------- kitchen ----------------
+    def dress_kitchen(self, room, finish=None, hoods=()):
+        """A working kitchen: washable walls, stainless worktops along every free wall, shelving with cookware and task light, hood over the stove, utensil rail, battens."""
+        rid = room["id"]
+        ch = room.get("ceilingHeight") or 2.8
+        g = self._collection("Kitchen")
+        if rid not in self._finished and room.get("category") not in self._finished:
+            self.finish_walls(rid, finish=finish or "subway:#ece9e2", skirting="charcoal", skirting_h=0.1)
+        # hoods first: they own the wall above the stove
+        for f, s_, it in hoods:
+            hit_z = min(1.95, ch - 0.68)
+            hp = self._F(f, s_, 0.44)
+            self.place("hood", (hp[0], hp[1]), rot=self._face_rot(f), z=hit_z, coll=g, name=f"{rid}_hood")
+            lc = self._F(f, s_, 0.44, hit_z - 0.02)
+            self.strip_light(self._F(f, s_ - 0.4, 0.44)[:2], self._F(f, s_ + 0.4, 0.44)[:2], hit_z - 0.02, (0, 0, -1), 22.0, kelvin=3800, width=0.1, name=f"{rid}_hood")
+        tops = []
+        for f in sorted(self._room_faces(rid), key=lambda x: -x["len"]):
+            blocked = sorted(self._face_blocked(f, 0.92, depth=0.66))
+            cur = 0.03
+            spans = []
+            for (b0, b1) in blocked + [(f["len"] - 0.03, f["len"] + 1)]:
+                if b0 - cur >= 0.6:
+                    spans.append((cur, b0))
+                cur = max(cur, b1)
+            for (s0, s1) in spans:
+                self._worktop(f, s0, s1, g, rid, len(tops))
+                tops.append((f, s0, s1))
+        # utensil rail above the longest worktop
+        if tops:
+            f, s0, s1 = max(tops, key=lambda t: t[2] - t[1])
+            self._utensils(f, s0, s1, g, rid)
+        self._batten(room, g, 75.0)
+        # floor drain
+        cx, cy = _centroid(room["polygon"])
+        self.box(f"{rid}_drain", (0.2, 0.2, 0.004), (cx, cy, 0.003), 0, self.M("brushed_steel"), g, bevel=0)
+        return g
+
+    def _batten(self, room, g, watts):
+        """Bright clean linear ceiling light along the length of a working room."""
+        rid, ch = room["id"], room.get("ceilingHeight") or 2.8
+        cx, cy = _centroid(room["polygon"])
+        xs = [p[0] for p in room["polygon"]]; ys = [p[1] for p in room["polygon"]]
+        alongx = (max(xs) - min(xs)) >= (max(ys) - min(ys))
+        L = min(2.4, (max(xs) - min(xs) if alongx else max(ys) - min(ys)) * 0.6)
+        ang = 0 if alongx else 90
+        self.box(f"{rid}_batten", (L, 0.09, 0.05), (cx, cy, ch - 0.03), ang, self.M("white"), g)
+        self.box(f"{rid}_batten_led", (L - 0.04, 0.07, 0.006), (cx, cy, ch - 0.057), ang, self.M("led_cool"), g, bevel=0)
+        d = bpy.data.lights.new(f"fill_{rid}_batten", "AREA")
+        d.shape = "RECTANGLE"; d.size = L; d.size_y = 0.12; d.energy = watts; d.color = kelvin_to_rgb(4000)
+        o = bpy.data.objects.new(f"fill_{rid}_batten", d)
+        o.location = (cx, cy, ch - 0.065); o.rotation_euler = (0, 0, math.radians(ang))
+        self._collection("Lighting").objects.link(o)
+
+    def _worktop(self, f, s0, s1, g, rid, idx):
+        """Stainless bench on a wall face: upstand, legs, undershelf with stock, wall shelf with cookware and task light; registered as a real counter."""
+        name = f"{rid}_top{idx}"
+        L, D, H = s1 - s0, 0.62, 0.9
+        c = (s0 + s1) / 2
+        ang = math.degrees(math.atan2(f["b"][1] - f["a"][1], f["b"][0] - f["a"][0]))
+        steel = self.M("brushed_steel")
+        Pc = self._F(f, c, D / 2)
+        self.box(f"{name}_top", (L, D, 0.04), (Pc[0], Pc[1], H - 0.02), ang, steel, g, bevel=0.003)
+        up = self._F(f, c, 0.012)
+        self.box(f"{name}_upstand", (L, 0.024, 0.12), (up[0], up[1], H + 0.06), ang, steel, g, bevel=0.002)
+        fr = self._F(f, c, D - 0.012)
+        self.box(f"{name}_apron", (L, 0.02, 0.09), (fr[0], fr[1], H - 0.085), ang, steel, g, bevel=0.002)
+        legs = max(2, int(L / 1.2) + 1)
+        for i in range(legs):
+            s_ = s0 + 0.05 + (L - 0.1) * i / (legs - 1)
+            for off in (0.06, D - 0.06):
+                p_ = self._F(f, s_, off)
+                self.box(f"{name}_leg", (0.04, 0.04, H - 0.05), (p_[0], p_[1], (H - 0.05) / 2), ang, steel, g, bevel=0.003)
+        sh = self._F(f, c, D / 2)
+        self.box(f"{name}_under", (L - 0.04, D - 0.1, 0.02), (sh[0], sh[1], 0.25), ang, steel, g, bevel=0.002)
+        # stock under the bench: lidded containers, crates, sacks
+        u = s0 + 0.2
+        k = 0
+        while u < s1 - 0.2:
+            p_ = self._F(f, u, D / 2)
+            if k % 3 == 0:
+                self.box(f"{name}_tub", (0.3, 0.4, 0.2), (p_[0], p_[1], 0.36), ang, self.M("white"), g, bevel=0.012)
+                self.box(f"{name}_lid", (0.31, 0.41, 0.02), (p_[0], p_[1], 0.47), ang, self.M("charcoal"), g, bevel=0.005)
+            elif k % 3 == 1:
+                self.lathe(f"{name}_potstock", [(0, 0), (0.15, 0), (0.15, 0.2), (0.142, 0.2), (0.142, 0.01), (0, 0.01)], (p_[0], p_[1], 0.26), self.M("steel"), 24, g)
+            else:
+                self.box(f"{name}_sack", (0.28, 0.38, 0.18), (p_[0], p_[1], 0.35), ang + 4, self.M("hessian"), g, bevel=0.05)
+            u += 0.42
+            k += 1
+        self._runs.append({"a": self._F(f, s0)[:2], "b": self._F(f, s1)[:2], "n": ((-(f["b"][1] - f["a"][1])) / f["len"], (f["b"][0] - f["a"][0]) / f["len"]), "u": ((f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]), "L": L, "depth": D, "h": H,
+                           "front": ((-(f["b"][1] - f["a"][1])) / f["len"], (f["b"][0] - f["a"][0]) / f["len"]), "line": self._F(f, s0)[:2], "name": name, "ang": ang, "items": []})
+        self._mark_face(f, s0, s1)
+        # bench styling
+        items = ["board", "pot", "jars", "knives", "bowls", "scale", "oil"]
+        u = s0 + 0.2
+        i = int(self.rng.random() * 7)
+        while u < s1 - 0.18:
+            self._bench_prop(items[i % len(items)], f, u, g, name, H)
+            i += 1
+            u += self.rng.uniform(0.55, 0.85)
+        # wall shelf + cookware + task light
+        Sz = 1.62
+        sp = self._F(f, c, 0.15)
+        self.box(f"{name}_shelf", (L, 0.3, 0.025), (sp[0], sp[1], Sz), ang, steel, g, bevel=0.002)
+        for i in range(max(2, int(L / 0.9) + 1)):
+            s_ = s0 + 0.06 + (L - 0.12) * i / max(1, max(2, int(L / 0.9) + 1) - 1)
+            bp = self._F(f, s_, 0.13)
+            self.box(f"{name}_bracket", (0.012, 0.26, 0.05), (bp[0], bp[1], Sz - 0.035), ang, self.M("black_steel"), g, bevel=0)
+        a_, b_ = self._F(f, s0 + 0.05, 0.24), self._F(f, s1 - 0.05, 0.24)
+        self.strip_light(a_[:2], b_[:2], Sz - 0.03, (0, 0, -1), 13.0, kelvin=3900, width=0.03, name=f"{name}_task")
+        self.box(f"{name}_taskled", (L - 0.1, 0.02, 0.008), (sp[0] + (a_[0] - self._F(f, s0 + 0.05, 0.15)[0]), sp[1] + (a_[1] - self._F(f, s0 + 0.05, 0.15)[1]), Sz - 0.018), ang, self.M("led_cool"), g, bevel=0)
+        u = s0 + 0.14
+        k = int(self.rng.random() * 5)
+        while u < s1 - 0.1:
+            p_ = self._F(f, u, 0.15)
+            z = Sz + 0.0125
+            kind = k % 5
+            if kind == 0:     # stacked plates
+                self.lathe(f"{name}_plates", [(0, 0), (0.09, 0), (0.125, 0.012), (0.125, 0.09), (0, 0.09)], (p_[0], p_[1], z), self.M("cup"), 28, g)
+                u += 0.3
+            elif kind == 1:   # lidded canisters
+                for t_ in range(2):
+                    q = self._F(f, u + t_ * 0.13, 0.15)
+                    self.lathe(f"{name}_can", [(0, 0), (0.055, 0), (0.055, 0.19), (0.058, 0.19), (0.058, 0.215), (0.012, 0.22), (0.012, 0.235), (0, 0.235)], (q[0], q[1], z), self.M("steel"), 20, g)
+                u += 0.34
+            elif kind == 2:   # glass jars of dry goods
+                for t_ in range(3):
+                    q = self._F(f, u + t_ * 0.105, 0.15)
+                    self.lathe(f"{name}_jar", [(0, 0), (0.044, 0), (0.046, 0.01), (0.046, 0.15), (0.03, 0.17), (0.03, 0.185), (0, 0.185)], (q[0], q[1], z), self.M("display_glass"), 16, g)
+                    self.lathe(f"{name}_grain", [(0, 0.004), (0.04, 0.004), (0.04, 0.1 + 0.03 * t_), (0, 0.1 + 0.03 * t_)], (q[0], q[1], z), self.M(("beans", "kraft", "pastry")[t_ % 3]), 12, g)
+                u += 0.4
+            elif kind == 3:   # stock pot with lid
+                self.lathe(f"{name}_pot", [(0, 0), (0.11, 0), (0.115, 0.01), (0.115, 0.17), (0.12, 0.175), (0.12, 0.185), (0.04, 0.2), (0.014, 0.2), (0.016, 0.225), (0, 0.228)], (p_[0], p_[1], z), self.M("steel"), 28, g)
+                u += 0.32
+            else:             # mixing bowls
+                self.lathe(f"{name}_bowl", [(0, 0), (0.05, 0), (0.13, 0.075), (0.135, 0.085), (0.128, 0.085), (0.05, 0.012), (0, 0.01)], (p_[0], p_[1], z), self.M("steel"), 28, g)
+                u += 0.32
+            k += 1
+
+    def _bench_prop(self, kind, f, u, g, name, H):
+        ang = math.degrees(math.atan2(f["b"][1] - f["a"][1], f["b"][0] - f["a"][0]))
+        p_ = self._F(f, u, 0.3)
+        if kind == "board":
+            self.box(f"{name}_board", (0.42, 0.28, 0.022), (p_[0], p_[1], H + 0.011), ang + self.rng.uniform(-6, 6), self.M("oak"), g, bevel=0.005)
+        elif kind == "pot":
+            self.lathe(f"{name}_saucepan", [(0, 0), (0.1, 0), (0.1, 0.12), (0.094, 0.12), (0.094, 0.006), (0, 0.006)], (p_[0], p_[1], H), self.M("steel"), 24, g)
+            a_ = self._F(f, u + 0.1, 0.3, H + 0.1); b_ = self._F(f, u + 0.3, 0.4, H + 0.11)
+            self.rod(f"{name}_handle", a_, b_, 0.009, self.M("black_steel"), 8, g)
+        elif kind == "jars":
+            for t_ in range(3):
+                q = self._F(f, u - 0.1 + t_ * 0.1, 0.12)
+                self.lathe(f"{name}_tin", [(0, 0), (0.04, 0), (0.04, 0.14), (0.042, 0.14), (0.042, 0.16), (0, 0.16)], (q[0], q[1], H), self.M(("oak", "steel", "white")[t_]), 14, g)
+        elif kind == "knives":
+            q = self._F(f, u, 0.1)
+            self.box(f"{name}_knifeblock", (0.1, 0.17, 0.2), (q[0], q[1], H + 0.1), ang, self.M("walnut"), g, bevel=0.005)
+            for t_ in range(4):
+                h_ = self._F(f, u - 0.03 + t_ * 0.02, 0.13, H + 0.2)
+                self.rod(f"{name}_knifehandle", h_, (h_[0], h_[1], H + 0.3), 0.008, self.M("black"), 8, g)
+        elif kind == "bowls":
+            self.lathe(f"{name}_mix", [(0, 0), (0.05, 0), (0.15, 0.09), (0.155, 0.1), (0.146, 0.1), (0.05, 0.012), (0, 0.01)], (p_[0], p_[1], H), self.M("steel"), 28, g)
+        elif kind == "scale":
+            self.box(f"{name}_scale", (0.2, 0.22, 0.04), (p_[0], p_[1], H + 0.02), ang, self.M("charcoal"), g, bevel=0.008)
+            self.box(f"{name}_pan", (0.17, 0.17, 0.006), (p_[0], p_[1], H + 0.044), ang, self.M("brushed_steel"), g, bevel=0)
+        else:
+            for t_ in range(2):
+                q = self._F(f, u + t_ * 0.09, 0.12)
+                self.lathe(f"{name}_oil", [(0, 0), (0.032, 0), (0.033, 0.16), (0.012, 0.21), (0.012, 0.26), (0, 0.26)], (q[0], q[1], H), self.M("dark_glass"), 12, g)
+
+    def _utensils(self, f, s0, s1, g, rid):
+        """Hanging rail with ladles, whisks and pans."""
+        z = 1.34
+        L = min(s1 - s0 - 0.2, 1.5)
+        c = (s0 + s1) / 2
+        self.rod(f"{rid}_utensilrail", self._F(f, c - L / 2, 0.03, z), self._F(f, c + L / 2, 0.03, z), 0.006, self.M("steel"), 8, g)
+        u = c - L / 2 + 0.08
+        k = 0
+        while u < c + L / 2 - 0.06:
+            top = self._F(f, u, 0.04, z)
+            kind = k % 4
+            if kind in (0, 2):   # ladle / spatula
+                lw = 0.26
+                self.rod(f"{rid}_ladle", top, (top[0], top[1], z - lw), 0.004, self.M("steel"), 6, g)
+                self.lathe(f"{rid}_ladlehead", [(0, 0), (0.03, 0.008), (0.04, 0.03), (0, 0.03)], (top[0], top[1], z - lw - 0.03), self.M("steel"), 12, g)
+                u += 0.12
+            elif kind == 1:      # small pan hung flat to the wall
+                cp = self._F(f, u + 0.09, 0.03, z - 0.3)
+                self.rod(f"{rid}_pan", self._F(f, u + 0.09, 0.012, z - 0.3), self._F(f, u + 0.09, 0.05, z - 0.3), 0.1, self.M("charcoal"), 26, g)
+                self.rod(f"{rid}_panhandle", (cp[0], cp[1], z - 0.2), top, 0.006, self.M("steel"), 6, g)
+                u += 0.26
+            else:                # whisk
+                self.rod(f"{rid}_whisk", top, (top[0], top[1], z - 0.16), 0.005, self.M("steel"), 6, g)
+                self.lathe(f"{rid}_whiskhead", [(0.004, 0), (0.028, 0.05), (0.022, 0.1), (0.005, 0.12)], (top[0], top[1], z - 0.28), self.M("steel"), 8, g)
+                u += 0.12
+            k += 1
+
+    def dress_storage(self, room):
+        """Dry store: steel racking with boxes and sacks along the free walls."""
+        rid = room["id"]
+        g = self._collection("Kitchen")
+        if rid not in self._finished and room.get("category") not in self._finished:
+            self.finish_walls(rid, finish="#d9d6cd", skirting="charcoal", skirting_h=0.1)
+        for f in self._room_faces(rid):
+            blocked = self._face_blocked(f, 1.9, depth=0.5)
+            cur, spans = 0.03, []
+            for (b0, b1) in sorted(blocked) + [(f["len"] - 0.03, f["len"] + 1)]:
+                if b0 - cur >= 0.7:
+                    spans.append((cur, b0))
+                cur = max(cur, b1)
+            for (s0, s1) in spans:
+                ang = math.degrees(math.atan2(f["b"][1] - f["a"][1], f["b"][0] - f["a"][0]))
+                c, L = (s0 + s1) / 2, s1 - s0
+                for lv, z in enumerate((0.2, 0.75, 1.3, 1.85)):
+                    p_ = self._F(f, c, 0.25)
+                    self.box(f"{rid}_rack", (L, 0.48, 0.022), (p_[0], p_[1], z), ang, self.M("brushed_steel"), g, bevel=0.002)
+                    u = s0 + 0.22
+                    while u < s1 - 0.2 and lv < 3:
+                        q = self._F(f, u, 0.25)
+                        if self.rng.random() < 0.82:
+                            self.box(f"{rid}_box", (0.3, 0.34, self.rng.uniform(0.2, 0.36)), (q[0], q[1], z + 0.14), ang + self.rng.uniform(-3, 3), self.M(self.rng.choice(("kraft", "white", "hessian"))), g, bevel=0.01)
+                        u += 0.38
+                for s_ in (s0 + 0.03, s1 - 0.03):
+                    for off in (0.04, 0.46):
+                        q = self._F(f, s_, off)
+                        self.box(f"{rid}_post", (0.026, 0.026, 1.95), (q[0], q[1], 0.975), ang, self.M("steel"), g, bevel=0.002)
+                self._mark_face(f, s0, s1)
+        self._batten(room, g, 34.0 + self._room_area(room) * 3.0)
 
     def _inset_sink(self, R, t, name):
         g = self._collection("Equipment")
@@ -2640,6 +3153,8 @@ class Kit:
     def finish(self, engine="CYCLES", samples=96, res=(1600, 900)):
         """Render settings. Live Blender keeps EEVEE for interaction; headless renders use Cycles."""
         sc = self.sc
+        if not self._plan_done:      # safety net: a design that forgot the legend still gets equipped washrooms and kitchens
+            self.plan_equipment()
         try:
             sc.render.engine = engine
         except TypeError:

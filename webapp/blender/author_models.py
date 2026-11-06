@@ -23,7 +23,7 @@ ALL = ["industrial", "scandinavian", "japandi", "bistro", "mediterranean", "deco
 
 
 def mats():
-    pbr("steel", "brushed_steel", tint="#c9cbce", metal=1.0, tiles_per_m=4.0, normal=0.08, rough_only=True)
+    pbr("steel", "brushed_steel", tint="#c9cbce", metal=1.0, tiles_per_m=4.0, normal=0.05, rough_only=True)
     plain("steel_dark", "#55585c", 0.35, 1.0)
     plain("chrome", "#e6e7e9", 0.06, 1.0)
     plain("black", "#121213", 0.45)
