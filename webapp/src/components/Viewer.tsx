@@ -27,6 +27,7 @@ const CafeCanvas = dynamic(() => import("@/components/scene/CafeCanvas"), {
 const TourViewer = dynamic(() => import("@/components/tour/TourViewer"), { ssr: false });
 const WalkOverlay = dynamic(() => import("@/components/tour/WalkOverlay"), { ssr: false });
 const BlenderWalkViewer = dynamic(() => import("@/components/tour/BlenderWalkViewer"), { ssr: false });
+const GalleryButtons = dynamic(() => import("@/components/tour/GalleryOverlay"), { ssr: false });
 
 const noSubscribe = () => () => {};
 
@@ -396,6 +397,7 @@ export default function Viewer() {
           {r.tour && r.tour.stops.length > 0 && (
             <button style={styles.designLink} onClick={() => setTour({ baseUrl: r.tour!.baseUrl, stops: r.tour!.stops as TourStop[] })}>🎬 Walk the 360° tour</button>
           )}
+          {r.id && !r.live && <GalleryButtons designId={r.id} projectName={scene.project.name} buttonStyle={styles.designLink} />}
           <a style={styles.designLink} href={r.designUrl} download>Download design.py</a>
           <button style={styles.designLink} onClick={() => { setBlenderResult(null); setDesignPanel(true); }}>New design</button>
           <button style={styles.designExit} onClick={() => setBlenderResult(null)}>✕ Exit</button>
@@ -412,7 +414,7 @@ export default function Viewer() {
             </figure>
           ))}
           {!r.stills.length && !r.live && (
-            <div style={styles.galleryNote}>{r.glbUrl ? "The café was built in Blender and exported as a 3D model. Use “Walk it on the web” above, or re-run with photoreal stills." : "No renders in this result."}</div>
+            <div style={styles.galleryNote}>{r.glbUrl ? "The café was built in Blender and exported as a 3D model. Use “Walk it on the web” above, or open Gallery and AI images for pictures of every area." : "No renders in this result."}</div>
           )}
         </div>
         {lightbox && (

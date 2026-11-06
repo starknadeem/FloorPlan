@@ -16,6 +16,7 @@ import net from "node:net";
 import type { CafeScene } from "@/types/cafescene";
 import { DESIGN_BLENDER_SYSTEM, buildBlenderUserText, loadKitAndExemplar } from "@/lib/design-blender/prompt";
 import { LAYOUTS, directionById, pickDirection } from "@/lib/design-blender/directions";
+import { startImageJob } from "@/lib/design-images/job";
 
 export const maxDuration = 300;
 
@@ -336,6 +337,8 @@ export async function POST(req: Request) {
         }
         meta.complete = true;
         await writeFile(path.join(outDir, "meta.json"), JSON.stringify(meta, null, 2), "utf8");
+        // prepare the gallery in the background so its images are ready before anyone opens it (DESIGN_IMAGES_AUTO=0 turns this off)
+        if (process.env.DESIGN_IMAGES_AUTO !== "0") await startImageJob(id).catch((e) => console.error("design-images:", e));
         send({ type: "done", id, designUrl, stills: meta.stills, tour: meta.tour, glbUrl: meta.glbUrl, sceneUrl: meta.sceneUrl, elapsedMs: Date.now() - t0 });
       } catch (e) {
         let msg = e instanceof Error ? e.message : "Blender design failed";

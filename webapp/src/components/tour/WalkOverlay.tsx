@@ -3,7 +3,7 @@
 // DOM chrome for the walkable tour: ident card + "where you are", mini-map, story/detail card,
 // numbered stops, play/evening/map/controls actions, touch joystick, toasts and the help sheet.
 
-import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
+import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import type { TourStore } from "@/lib/tour/store";
 import type { RoomCategory } from "@/types/cafescene";
 
@@ -170,11 +170,13 @@ export default function WalkOverlay({
   projectName,
   subtitle,
   onExit,
+  extraActions,
 }: {
   store: TourStore;
   projectName: string;
   subtitle?: string;
   onExit?: () => void;
+  extraActions?: (buttonStyle: CSSProperties) => ReactNode;
 }) {
   useTourVersion(store);
   const coarse = typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
@@ -227,6 +229,7 @@ export default function WalkOverlay({
             <button style={S.act} onClick={() => store.toggleMap()}>
               {store.mapVisible ? "Hide map" : "Show map"}
             </button>
+            {extraActions?.(S.act)}
             <button style={S.act} onClick={() => store.setHelp(true)}>
               Controls
             </button>

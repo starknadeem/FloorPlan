@@ -14,6 +14,7 @@ import { buildTourModel } from "@/lib/tour/model";
 import { TourStore } from "@/lib/tour/store";
 import WalkController from "./WalkController";
 import WalkOverlay, { useTourVersion } from "./WalkOverlay";
+import GalleryButtons from "./GalleryOverlay";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 /** Architecture and lighting objects from cafe_kit never block walking. */
@@ -209,6 +210,7 @@ function SceneLights({ store, sun }: { store: TourStore; sun: [number, number, n
 
 function Inner({ glbUrl, scene, projectName, onExit }: { glbUrl: string; scene: CafeScene; projectName: string; onExit?: () => void }) {
   const gltf = useGLTF(glbUrl);
+  const designId = glbUrl.match(/blender-designs\/([^/]+)\//)?.[1];
   const { store, model, sun } = useMemo(() => {
     const sun = sunPosition(gltf.scene);
     const blocks = prepareModel(gltf.scene);
@@ -236,7 +238,13 @@ function Inner({ glbUrl, scene, projectName, onExit }: { glbUrl: string; scene: 
         <DevStats model={model} />
         <WalkController store={store} />
       </Canvas>
-      <WalkOverlay store={store} projectName={projectName} subtitle="AI design · built in Blender · walkable model" onExit={onExit} />
+      <WalkOverlay
+        store={store}
+        projectName={projectName}
+        subtitle="AI design · built in Blender · walkable model"
+        onExit={onExit}
+        extraActions={designId ? (style) => <GalleryButtons designId={designId} projectName={projectName} buttonStyle={style} /> : undefined}
+      />
     </>
   );
 }
