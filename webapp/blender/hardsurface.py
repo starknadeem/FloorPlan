@@ -20,6 +20,7 @@ from mathutils import Euler, Matrix, Vector  # type: ignore
 
 TEX = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "public", "textures"))
 _MATS = {}
+QUALITY = 1.0   # author_models --web lowers this: fewer sides on round parts, no micro bevels, tiny details dropped
 
 
 def _srgb(h):
@@ -158,6 +159,12 @@ class Model:
     # ---- primitives ----
     def box(self, size, at, mat, bevel=0.003, seg=2, rot=(0, 0, 0)):
         """Rounded box of size (x, y, z) centred at `at`."""
+        if QUALITY < 1.0:
+            if max(size) < 0.03:     # buttons, slots, indicator details
+                return
+            seg = 1
+            if bevel < 0.006:
+                bevel = 0.0
         res = bmesh.ops.create_cube(self.bm, size=1.0)
         bmesh.ops.scale(self.bm, vec=size, verts=res["verts"])
         if bevel > 0 and min(size) > bevel * 2.2:
@@ -167,6 +174,10 @@ class Model:
 
     def cyl(self, r, h, at, mat, rot=(0, 0, 0), seg=32, r2=None, bevel=0.0):
         """Cylinder/cone; `at` is the centre of the base before rotation (axis +Z)."""
+        if QUALITY < 1.0 and max(r, h) < 0.012:
+            return
+        seg = max(6, int(seg * QUALITY))
+        bevel = 0.0 if QUALITY < 1.0 else bevel
         res = bmesh.ops.create_cone(self.bm, cap_ends=True, segments=seg, radius1=r, radius2=r if r2 is None else r2, depth=h)
         bmesh.ops.translate(self.bm, vec=(0, 0, h / 2), verts=res["verts"])
         if bevel > 0:
@@ -176,6 +187,7 @@ class Model:
 
     def lathe(self, profile, at, mat, seg=32, rot=(0, 0, 0)):
         """Revolve a (radius, z) profile about +Z. Radius 0 points close the ends."""
+        seg = max(8, int(seg * QUALITY))
         rings = []
         for (r, z) in profile:
             if r <= 1e-6:
@@ -196,6 +208,8 @@ class Model:
 
     def tube(self, pts, r, mat, seg=10, samples=8, closed=False, caps=True):
         """Round tube swept through points with Catmull-Rom smoothing (bent steel, faucets, frames)."""
+        seg = max(6, int(seg * QUALITY))
+        samples = max(2 if samples > 1 else 1, int(samples * QUALITY))
         P = [Vector(p) for p in pts]
         path = []
         n = len(P)

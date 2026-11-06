@@ -939,6 +939,11 @@ def export(o, rel):
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     only = argv[argv.index("--only") + 1] if "--only" in argv else None
+    web = "--web" in argv
+    if web:   # low-detail twin of every model, same size and origin, for the walkable web export
+        hs.QUALITY = 0.5
+        global MODELS
+        MODELS = os.path.join(HERE, "assets", "models_web")
     bpy.ops.wm.read_factory_settings(use_empty=True)
     mats()
     man = json.load(open(MANIFEST))
@@ -954,6 +959,10 @@ def main():
             mx = [max(c[i] for c in bb) for i in range(3)]
             kb = export(o, rel) // 1024
             tris = sum(len(p.vertices) - 2 for p in o.data.polygons)
+            if web:
+                print(f"WEB {rel:34s} {tris:7d} tris {kb:6d} KB", flush=True)
+                bpy.data.objects.remove(o, do_unlink=True)
+                continue
             items = [i for i in man.setdefault(cat, []) if i.get("variant") != variant]
             items.append({"variant": variant, "file": rel, "footprint": [round(mx[0] - mn[0], 3), round(mx[1] - mn[1], 3)], "height": round(mx[2] - mn[2], 3),
                           "forward_deg": 0, "fit": "real", "style_tags": tags, "tris": tris, "source": "custom:author_models.py", "license": "CC0"})
@@ -964,7 +973,8 @@ def main():
             fails += 1
             import traceback
             print(f"FAILED {rel}: {e}\n{traceback.format_exc()}", flush=True)
-    json.dump(man, open(MANIFEST, "w"), indent=1)
+    if not web:
+        json.dump(man, open(MANIFEST, "w"), indent=1)
     print(f"AUTHOR_DONE fails={fails}", flush=True)
 
 

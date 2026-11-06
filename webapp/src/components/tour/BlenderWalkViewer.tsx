@@ -14,6 +14,7 @@ import { buildTourModel } from "@/lib/tour/model";
 import { TourStore } from "@/lib/tour/store";
 import WalkController from "./WalkController";
 import WalkOverlay, { useTourVersion } from "./WalkOverlay";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
 /** Architecture and lighting objects from cafe_kit never block walking. */
 const ARCH_PREFIX = ["floor_", "ceiling_", "wall_", "glass_", "frame_", "mullion_", "skirt_", "downlight", "Sun", "fill_", "PanoCam", "Camera"];
@@ -51,8 +52,9 @@ function optimizeModel(root: THREE.Object3D): THREE.Group {
       continue;
     }
     l.castShadow = false;
-    l.intensity = 5;
-    (l as THREE.PointLight).distance = 7;
+    l.intensity = 6;
+    l.color.offsetHSL(0, -0.1, 0.02);
+    (l as THREE.PointLight).distance = 6;
     (l as THREE.PointLight).decay = 2;
   }
   // --- meshes: merge by material (+ attribute signature); floors stay identifiable for click-to-walk
@@ -63,6 +65,10 @@ function optimizeModel(root: THREE.Object3D): THREE.Group {
   });
   for (const m of meshes) {
     const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material;
+    for (const t of ["map", "normalMap", "roughnessMap"] as const) {
+      const tex = (mat as unknown as Record<string, THREE.Texture | null | undefined>)[t];
+      if (tex) tex.anisotropy = 8;
+    }
     const g = m.geometry.clone();
     for (const name of Object.keys(g.attributes)) if (!["position", "normal", "uv"].includes(name)) g.deleteAttribute(name);
     if (!g.attributes.normal) g.computeVertexNormals();
@@ -88,6 +94,32 @@ function optimizeModel(root: THREE.Object3D): THREE.Group {
     out.add(mesh);
   }
   for (const l of keep) out.add(l);
+  return out;
+}
+
+function applyRoomEnvironment(gl: THREE.WebGLRenderer, scene: THREE.Scene, intensity: number) {
+  const pmrem = new THREE.PMREMGenerator(gl);
+  const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environment = env;
+  scene.environmentIntensity = intensity;
+  return () => {
+    scene.environment = null;
+    env.dispose();
+    pmrem.dispose();
+  };
+}
+
+/** Direction toward the sun as designed in Blender (falls back to a high southern sun). */
+function sunPosition(root: THREE.Object3D): [number, number, number] {
+  let out: [number, number, number] = [-9, 22, 38];
+  root.traverse((o) => {
+    if ((o as THREE.DirectionalLight).isDirectionalLight) {
+      const q = new THREE.Quaternion();
+      o.getWorldQuaternion(q);
+      const toward = new THREE.Vector3(0, 0, 1).applyQuaternion(q).multiplyScalar(45);
+      out = [toward.x, Math.max(toward.y, 10), toward.z];
+    }
+  });
   return out;
 }
 
@@ -141,20 +173,27 @@ function DevStats({ model }: { model: THREE.Group }) {
   return null;
 }
 
-function SceneLights({ store }: { store: TourStore }) {
+/** Soft studio-like reflections so metal, marble and glass read as real materials instead of going black. */
+function Reflections({ evening }: { evening: boolean }) {
+  const { gl, scene } = useThree();
+  useEffect(() => applyRoomEnvironment(gl, scene, evening ? 0.18 : 0.42), [gl, scene, evening]);
+  return null;
+}
+
+function SceneLights({ store, sun }: { store: TourStore; sun: [number, number, number] }) {
   useTourVersion(store);
   const ev = store.evening;
   return (
     <>
-      <ambientLight intensity={ev ? 0.1 : 0.38} />
-      <hemisphereLight color={ev ? "#6f7aa0" : "#fff1dc"} groundColor="#7a6a58" intensity={ev ? 0.15 : 0.7} />
+      <ambientLight intensity={ev ? 0.1 : 0.22} />
+      <hemisphereLight color={ev ? "#6f7aa0" : "#fff1dc"} groundColor="#7a6a58" intensity={ev ? 0.15 : 0.5} />
       <directionalLight
-        position={ev ? [-30, 7, 30] : [-9, 22, 38]}
-        intensity={ev ? 0.3 : 2.0}
+        position={ev ? [-30, 7, 30] : sun}
+        intensity={ev ? 0.3 : 2.6}
         color={ev ? "#ffa86a" : "#fff0da"}
         castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
         shadow-camera-left={-25}
         shadow-camera-right={25}
         shadow-camera-top={25}
@@ -170,11 +209,12 @@ function SceneLights({ store }: { store: TourStore }) {
 
 function Inner({ glbUrl, scene, projectName, onExit }: { glbUrl: string; scene: CafeScene; projectName: string; onExit?: () => void }) {
   const gltf = useGLTF(glbUrl);
-  const { store, model } = useMemo(() => {
+  const { store, model, sun } = useMemo(() => {
+    const sun = sunPosition(gltf.scene);
     const blocks = prepareModel(gltf.scene);
     const synthetic: CafeScene = { ...scene, fixtures: blocks };
     const model = optimizeModel(gltf.scene);
-    return { store: new TourStore(buildTourModel(synthetic)), model };
+    return { store: new TourStore(buildTourModel(synthetic)), model, sun };
   }, [gltf, scene]);
   useEffect(() => () => store.dispose(), [store]);
 
@@ -182,15 +222,16 @@ function Inner({ glbUrl, scene, projectName, onExit }: { glbUrl: string; scene: 
     <>
       <Canvas
         shadows
-        dpr={[1, 1.25]}
+        dpr={[1, 1.5]}
         gl={{ antialias: true }}
         onCreated={({ gl }) => {
           gl.toneMapping = THREE.ACESFilmicToneMapping;
-          gl.toneMappingExposure = 1.15;
+          gl.toneMappingExposure = 1.05;
           gl.shadowMap.type = THREE.PCFSoftShadowMap;
         }}
       >
-        <SceneLights store={store} />
+        <Reflections evening={store.evening} />
+        <SceneLights store={store} sun={sun} />
         <primitive object={model} />
         <DevStats model={model} />
         <WalkController store={store} />

@@ -182,6 +182,7 @@ class Kit:
         self._mood = "day"
         self._runs = []       # counters/back bars, so equipment can sit on them
         self._occupied = []   # (x, y, radius) of placed equipment
+        self._canopies = []   # (x, y, radius) of trees
         self.sc = bpy.context.scene
         if clear:
             self.clear_scene()
@@ -199,6 +200,7 @@ class Kit:
         self.manifest = self._load_manifest()
         self._asset_templates = {}        # file -> (entries, size, mn, center) | None
         self._chosen = {}                 # category -> locked variant entry (one model per café, coherent)
+        self._placed = []                 # (object, library file, part index), so the web export can swap in low-detail models
 
     # ---------------- scene plumbing ----------------
     def clear_scene(self):
@@ -382,21 +384,27 @@ class Kit:
         self.mat_plain("kraft", "#b48a5a", roughness=0.8)
         self.mat_plain("pastry", "#c98d4d", roughness=0.7)
         self.mat_plain("pastry_dark", "#8a5a30", roughness=0.7)
-        self.mat_plain("leaf_a", "#4d6b3a", roughness=0.55)
-        self.mat_plain("leaf_b", "#6d8a4d", roughness=0.6)
-        self.mat_plain("leaf_dark", "#23331c", roughness=0.9)
-        self.mat_plain("leaf_olive", "#7c8a68", roughness=0.7)
-        self.mat_plain("leaf_olive2", "#99a585", roughness=0.75)
+        self.mat_plain("leaf_a", "#3f5f2e", roughness=0.42)
+        self.mat_plain("leaf_b", "#58783c", roughness=0.45)
+        self.mat_plain("leaf_c", "#2f4d27", roughness=0.4)
+        self.mat_plain("leaf_stem", "#5a5a30", roughness=0.7)
+        self.mat_plain("leaf_dark", "#141f10", roughness=0.95)
+        self.mat_plain("box_light", "#4f7a34", roughness=0.42)
+        self.mat_plain("box_mid", "#35592a", roughness=0.45)
+        self.mat_plain("box_deep", "#1f3a1c", roughness=0.6)
+        self.mat_plain("leaf_olive", "#5e6e48", roughness=0.5)
+        self.mat_plain("leaf_olive2", "#77875d", roughness=0.5)
+        self.mat_plain("leaf_olive3", "#a1ab8c", roughness=0.62)
         self.mat_plain("greens", "#5f7f46", roughness=0.8)
         self.mat_plain("olive_green", "#7d8a66", roughness=0.9)
-        self.mat_plain("bark", "#5e5145", roughness=1.0)
+        self.mat_plain("bark", "#4d4238", roughness=0.95)
         self.mat_plain("pot", "#a69f95", roughness=0.85)
         self.mat_plain("soil", "#2c2219", roughness=1.0)
         self.mat_plain("canvas", "#eee8da", roughness=0.95)
         self.mat_plain("enamel_sage", "#9fae95", roughness=0.25, coat=0.6)
         self.mat_plain("matte_black", "#1a1a1a", roughness=0.6)
         self.mat_plain("screen", "#0d0f12", roughness=0.15, emission="#3a5468", strength=1.2)
-        self.mat_plain("led", "#000000", emission="#ffc78a", strength=7.0)
+        self.mat_plain("led", "#000000", emission="#ffc78a", strength=5.0)
         self.mat_plain("led_cool", "#000000", emission="#fff0d6", strength=6.0)
         self.mat_plain("opal", "#f3ece0", roughness=0.4, emission="#ffd29a", strength=3.5)
         self.mat_plain("lens", "#000000", emission="#fff0d6", strength=9.0)
@@ -555,11 +563,12 @@ class Kit:
              @ mathutils.Matrix.Translation((-center.x, -center.y, -mn.z)))
         g = coll or self.coll
         objs = []
-        for (data, mw) in entries:
+        for idx, (data, mw) in enumerate(entries):
             o = bpy.data.objects.new(name or f"{category}_{it['variant']}", data)
             o.matrix_world = M @ mw
             g.objects.link(o)
             objs.append(o)
+            self._placed.append((o, it["file"], idx))
         return objs
 
     # ---------------- geometry primitives ----------------
@@ -760,7 +769,8 @@ class Kit:
                 self.slab(f"ceiling_{room['id']}", room["polygon"], ch, self.M(ceiling), coll=arch)
                 self.slab(f"ceiling_roof_{room['id']}", room["polygon"], max(top, ch + 0.2), self.M("roof"), coll=arch)
                 if downlights:
-                    self.downlights(room["polygon"], ch, coll=arch)
+                    work = cat in ("preparation", "kitchen", "storage") or str(cat).startswith("wc")
+                    self.downlights(room["polygon"], ch, coll=arch, power=55.0 if work else 28.0, kelvin=4000 if work else 3000)
         self._site(ground, context, arch)
         return arch
 
@@ -1076,7 +1086,7 @@ class Kit:
             o.rotation_euler = (0, 0, math.radians(ang))
             g.objects.link(o)
 
-    def downlights(self, polygon, z, step=2.0, margin=0.6, power=60.0, coll=None):
+    def downlights(self, polygon, z, step=2.0, margin=0.75, power=28.0, coll=None, kelvin=3000):
         xs = [p[0] for p in polygon]; ys = [p[1] for p in polygon]
         n = 0
         x = min(xs) + margin
@@ -1087,7 +1097,7 @@ class Kit:
                     self.cyl(f"downlight", 0.055, 0.02, (x, y, z - 0.02), self.M("lens"), 16, coll=coll)
                     d = bpy.data.lights.new("downlight", "SPOT")
                     d.energy = power; d.spot_size = math.radians(88); d.spot_blend = 0.8
-                    d.color = kelvin_to_rgb(3700); d.shadow_soft_size = 0.08
+                    d.color = kelvin_to_rgb(kelvin); d.shadow_soft_size = 0.06
                     o = bpy.data.objects.new("downlight", d)
                     o.location = (x, y, z - 0.03)
                     o.rotation_euler = (0, 0, 0)  # spot points -Z
@@ -1179,6 +1189,8 @@ class Kit:
         if led_kick:
             fx, fy = cx - nx * (depth / 2 - 0.05), cy - ny * (depth / 2 - 0.05)
             self.box(f"{name}_led", (L - 0.1, 0.012, 0.01), (fx, fy, 0.09), ang, self.M("led"), g, bevel=0)
+            ax_, ay_ = a[0] + nx * 0.06, a[1] + ny * 0.06
+            self.strip_light((ax_, ay_), (ax_ + (b[0] - a[0]), ay_ + (b[1] - a[1])), 0.085, (-nx * 0.9, -ny * 0.9, -0.5), 7.0, name=f"{name}_kick")
         return (cx, cy, h, ang)
 
     def back_bar(self, a, b, depth=0.6, h=0.92, shelves=3, shelf_z=(1.55, 1.95, 2.35), cups=True, led=True, splash="terrazzo", body="walnut", top="terrazzo", side=1, name="backbar"):
@@ -1201,6 +1213,8 @@ class Kit:
             self.box(f"{name}_shelf{i}_edge", (L, 0.015, 0.035), (sx + nx * sd / 2, sy + ny * sd / 2, z), ang, self.M("black_steel"), g)
             if led:
                 self.box(f"{name}_shelf{i}_led", (L - 0.08, 0.02, 0.008), (sx + nx * (sd / 2 - 0.03), sy + ny * (sd / 2 - 0.03), z - 0.022), ang, self.M("led"), g)
+                ox, oy = nx * (sd - 0.04), ny * (sd - 0.04)
+                self.strip_light((a[0] + ox, a[1] + oy), (b[0] + ox, b[1] + oy), z - 0.028, (nx * 0.35, ny * 0.35, -1), 3.0, name=f"{name}_shelf{i}")
             if cups:
                 self.cup_row(a, b, z + 0.0175, offset=sd / 2, side=side, name=f"{name}_cups{i}")
         return (cx, cy, h, ang)
@@ -1290,6 +1304,9 @@ class Kit:
         self.box(f"{name}_glass", (w, d, glass_h), P(0, 0, h_base + glass_h / 2), rot, self.M("display_glass"), g)
         self.box(f"{name}_lid", (w + 0.02, d + 0.02, 0.03), P(0, 0, h_base + glass_h + 0.015), rot, self.M("black_steel"), g)
         self.box(f"{name}_led", (w - 0.1, 0.02, 0.01), P(0, d / 2 - 0.04, h_base + glass_h - 0.03), rot, self.M("led_cool"), g)
+        for lz in (glass_h - 0.035, 0.235):
+            la, lb = P(-w / 2 + 0.06, 0.0, h_base + lz), P(w / 2 - 0.06, 0.0, h_base + lz)
+            self.strip_light(la[:2], lb[:2], la[2], (0, 0, -1), 5.0, kelvin=3400, width=0.08, name=f"{name}_case")
         self.box(f"{name}_shelf", (w - 0.08, d - 0.12, 0.02), P(0, 0, h_base + 0.26), rot, self.M("steel"), g)
         if pastries:
             foods = self.manifest.get("pastry")
@@ -1381,6 +1398,7 @@ class Kit:
             self.box(f"{name}_side", (0.03, depth, h), (end[0] + nx * depth / 2, end[1] + ny * depth / 2, h / 2), ang, self.M("walnut"), g)
         self.box(f"{name}_topcap", (L, depth, 0.04), (cx, cy, h - 0.02), ang, self.M("walnut"), g)
         self.box(f"{name}_led", (L - 0.06, 0.02, 0.01), (cx + nx * (depth / 2 - 0.03), cy + ny * (depth / 2 - 0.03), h - 0.05), ang, self.M("led"), g)
+        self.strip_light((a[0] + nx * (depth - 0.05), a[1] + ny * (depth - 0.05)), (b[0] + nx * (depth - 0.05), b[1] + ny * (depth - 0.05)), h - 0.055, (-nx * 0.5, -ny * 0.5, -1), 9.0, name=f"{name}_top")
         pal = ["#b48a5a", "#2a2420", "#3e5c44", "#efe8dc", "#7a4a2c", "#c9b089", "#9b2d20"]
         for i in range(levels):
             z = 0.12 + i * (h - 0.4) / max(1, levels - 1)
@@ -1571,6 +1589,7 @@ class Kit:
         if panel:
             self.box(f"{name}_panel", (L, 0.04, panel_h - back_h), (px, py, back_h + (panel_h - back_h) / 2), ang, self.M(panel), g)
             self.box(f"{name}_cove", (L - 0.1, 0.012, 0.008), (px + nx * 0.03, py + ny * 0.03, panel_h - 0.02), ang, self.M("led"), g, bevel=0)
+            self.strip_light((a[0] + nx * 0.07, a[1] + ny * 0.07), (b[0] + nx * 0.07, b[1] + ny * 0.07), panel_h - 0.03, (-nx * 0.8, -ny * 0.8, -0.3), 12.0, name=f"{name}_cove")
         return g
 
     # ---------------- interior design layer: walls, ceilings, styling ----------------
@@ -1649,6 +1668,7 @@ class Kit:
         if led:
             for (ax, ay, bx, by) in ((x0, y0, x1, y0), (x1, y1, x0, y1)):
                 self.led_strip((ax, ay), (bx, by), z - drop + 0.02, name=f"{name}_cove")
+                self.strip_light((ax, ay), (bx, by), z - drop + 0.03, (0, 0, 1), 22.0, name=f"{name}_cove")
         return g
 
     def track_light(self, a, b, z, heads=4, power=70.0, aim=None, name="track"):
@@ -1717,6 +1737,7 @@ class Kit:
         nx, ny = -math.sin(r), math.cos(r)
         self.box(f"{name}_board", (w, 0.22, 0.03), (at[0] + nx * 0.11, at[1] + ny * 0.11, z), rot, self.M("walnut"), g)
         self.box(f"{name}_led", (w - 0.06, 0.01, 0.008), (at[0] + nx * 0.2, at[1] + ny * 0.2, z - 0.02), rot, self.M("led"), g)
+        self.strip_light((at[0] - ux * w / 2 + nx * 0.19, at[1] - uy * w / 2 + ny * 0.19), (at[0] + ux * w / 2 + nx * 0.19, at[1] + uy * w / 2 + ny * 0.19), z - 0.026, (-nx * 0.5, -ny * 0.5, -1), 6.0, name=f"{name}_under")
         u = -w / 2 + 0.08
         k = 0
         while u < w / 2 - 0.08:
@@ -1738,16 +1759,37 @@ class Kit:
         return g
 
     def hanging_plants(self, a, b, z, n=3, name="hang"):
-        """Trailing plants in hung pots along a→b; z = ceiling height underside."""
+        """Trailing plants in hung pots along a→b; z = ceiling height underside. Real vines with leaves along them."""
         g = self._collection("Props")
         (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
+        rng = self.rng
         for i in range(n):
             u = L * (i + 0.5) / n
             x, y = a[0] + ux * u, a[1] + uy * u
             self.cyl(f"{name}_cord", 0.002, 0.6, (x, y, z - 0.6), self.M("black"), 6, coll=g)
             self.lathe(f"{name}_pot", [(0, 0), (0.07, 0), (0.115, 0.13), (0.125, 0.14), (0.118, 0.14), (0, 0.11)], (x, y, z - 0.75), self.M("pot"), 24, g)
-            self._leaf_cloud(f"{name}_leaf", (x, y, z - 0.68), (0.2, 0.2, 0.13), 240, 0.08, coll=g)
-            self._leaf_cloud(f"{name}_trail", (x, y, z - 1.0), (0.22, 0.22, 0.32), 220, 0.07, coll=g, droop=1.2)
+            vines = bmesh.new()
+            bms = [bmesh.new() for _ in range(3)]
+            for k in range(11):
+                a_ = 6.283 * k / 11 + rng.uniform(-0.2, 0.2)
+                out = rng.uniform(0.08, 0.13)
+                length = rng.uniform(0.3, 0.95)
+                pts = [Vector((x + math.cos(a_) * out, y + math.sin(a_) * out, z - 0.62))]
+                dirx, diry = math.cos(a_), math.sin(a_)
+                segs = max(4, int(length / 0.05))
+                for t in range(segs):
+                    f = 1 - t / segs
+                    pts.append(pts[-1] + Vector((dirx * 0.04 * f + rng.uniform(-0.012, 0.012), diry * 0.04 * f + rng.uniform(-0.012, 0.012), -length / segs)))
+                self._tube_into(vines, pts, 0.0028, 0.0016, seg=4)
+                for pi, p_ in enumerate(pts[:-1]):
+                    for side in (-1, 1):
+                        ld = Vector((dirx * side * 0.7 + rng.uniform(-0.5, 0.5), diry * side * 0.7 + rng.uniform(-0.5, 0.5), rng.uniform(-0.7, -0.05))).normalized()
+                        ll = rng.uniform(0.06, 0.095) * (1 - 0.35 * pi / len(pts))
+                        self._leaf_into(bms[rng.randrange(3)], p_ + Vector((rng.uniform(-0.01, 0.01), rng.uniform(-0.01, 0.01), 0)), ld, Vector((rng.uniform(-0.3, 0.3), rng.uniform(-0.3, 0.3), 1)), ll, ll * 0.62)
+            self._commit_bm(vines, f"{name}_twig", "leaf_stem", g, smooth=60.0)
+            for j, (bm, mt) in enumerate(zip(bms, ("leaf_a", "leaf_b", "leaf_c"))):
+                self._commit_bm(bm, f"{name}{i}_leaf{j}", mt, g)
+            self._leaf_cloud(f"{name}{i}_crown", (x, y, z - 0.6), (0.17, 0.17, 0.07), 90, 0.07, coll=g)
         return g
 
     def mirror(self, at, rot=0.0, z=1.5, w=1.2, h=1.6, name="mirror"):
@@ -1785,18 +1827,46 @@ class Kit:
         return g
 
     def planter_hedge(self, a, b, w=0.4, h=0.45, hedge_h=0.5, name="hedge", planter="pot"):
-        """Street-edge planter: a real trough with soil and a clipped hedge made of leaf cards."""
+        """Planter trough with a formally clipped boxwood hedge: a crisp rounded block of dense tiny leaves over dark interior foliage."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
         g = self._collection("Props")
         mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
         self.box(f"{name}_planter", (L, w, h), (mx, my, h / 2), ang, self.M(planter), g, bevel=0.012)
-        self.box(f"{name}_soil", (L - 0.05, w - 0.05, 0.01), (mx, my, h + 0.002), ang, self.M("soil"), g, bevel=0)
-        n = max(1, int(L / 0.32))
-        horiz = abs(ux) > abs(uy)
-        rl, rw = 0.34, w * 0.6
+        self.box(f"{name}_rim", (L + 0.03, w + 0.03, 0.03), (mx, my, h - 0.012), ang, self.M(planter), g, bevel=0.008)
+        hx, hy, hz = L / 2 - 0.015, w / 2 + 0.03, hedge_h / 2
+        cz = h + hz - 0.02
+        self.box(f"{name}_core", (2 * hx - 0.11, 2 * hy - 0.11, 2 * hz - 0.11), (mx, my, cz), ang, self.M("leaf_dark"), g, bevel=0.04)
+        faces_ = [("x", 3 * 2 * hy * 2 * hz), ("y", 2 * hx * 2 * hz), ("z", 2 * hx * 2 * hy)]
+        total_a = 2 * sum(f[1] for f in faces_) - 2 * faces_[2][1] * 0.5     # the underside is barely seen
+        n = int(total_a * 4800)
+        rng = self.rng
+        bms = [bmesh.new() for _ in range(3)]
+        fq = rng.uniform(5, 8)
+        names = [f[0] for f in faces_]
+        weights = [f[1] for f in faces_]
         for i in range(n):
-            u = L * (i + 0.5) / n
-            self._leaf_cloud(f"{name}_leaf", (a[0] + ux * u, a[1] + uy * u, h + hedge_h * 0.5), (rl if horiz else rw, rw if horiz else rl, hedge_h * 0.6), 420, 0.045, ("leaf_a", "leaf_b", "leaf_dark"), g, core="leaf_dark", core_k=0.62)
+            ax_ = rng.choices(names, weights)[0]
+            sg = rng.choice((-1, 1)) if ax_ != "z" else (1 if rng.random() < 0.9 else -1)
+            dx = (sg * hx) if ax_ == "x" else rng.uniform(-hx, hx)
+            dy = (sg * hy) if ax_ == "y" else rng.uniform(-hy, hy)
+            dz = (sg * hz) if ax_ == "z" else rng.uniform(-hz, hz)
+            # round the block (superellipsoid, exponent 6): clipped faces with softly rounded edges
+            q = (abs(dx / hx) ** 6 + abs(dy / hy) ** 6 + abs(dz / hz) ** 6) ** (1 / 6)
+            lx, ly, lz = dx / q, dy / q, dz / q
+            gx, gy, gz = (lx / hx) ** 3 * abs(lx / hx), (ly / hy) ** 3 * abs(ly / hy), (lz / hz) ** 3 * abs(lz / hz)
+            N = Vector((gx / hx, gy / hy, gz / hz)).normalized()
+            bump = 0.012 * (math.sin(lx * fq + 1.3) + math.sin(ly * fq * 1.7) + math.sin(lz * fq * 1.3 + lx * 3))
+            depth = rng.uniform(-0.035, 0.016) + bump
+            pl = Vector((lx, ly, lz)) + N * depth
+            wx = mx + ux * pl.x + nx * pl.y
+            wy = my + uy * pl.x + ny * pl.y
+            N_w = Vector((ux * N.x + nx * N.y, uy * N.x + ny * N.y, N.z))
+            rd = Vector((rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1)))
+            d = (N_w * 0.65 + rd.normalized() * 0.8).normalized()
+            kind = 0 if depth > 0.0 else (1 if depth > -0.02 else 2)
+            self._leaf_into(bms[kind], Vector((wx, wy, cz + pl.z)), d, N_w, rng.uniform(0.028, 0.042), rng.uniform(0.015, 0.022))
+        for i, (bm, mt) in enumerate(zip(bms, ("box_light", "box_mid", "box_deep"))):
+            self._commit_bm(bm, f"{name}_leaf{i}", mt, g)
         return g
 
     def string_lights(self, a, b, z, n=12, sag=0.25, name="festoon"):
@@ -1893,35 +1963,73 @@ class Kit:
         (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
         return self.box(name, (L, 0.02, 0.01), ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, z), ang, self.M(mat), self._collection("Lighting"))
 
-    def _leaf_cloud(self, name, center, radii, n, leaf=0.06, mats=("leaf_a", "leaf_b"), coll=None, droop=0.0, core=None, core_k=0.78):
-        """Foliage from real leaf cards (thousands of small quads in an ellipsoid), not blobs. core: material of a dark
-        inner volume so clipped hedges read as solid foliage instead of floating flakes."""
-        g = coll or self._collection("Props")
-        if core:
-            self.sphere(f"{name}_core", 1.0, center, self.M(core), (radii[0] * core_k, radii[1] * core_k, radii[2] * core_k), coll=g)
-        for mi, mname in enumerate(mats):
-            bm = bmesh.new()
-            for _ in range(n // len(mats)):
-                while True:
-                    x, y, z = (self.rng.uniform(-1, 1) for _ in range(3))
-                    if x * x + y * y + z * z <= 1:
-                        break
-                k = 0.72 + 0.28 * self.rng.random()
-                p = Vector((center[0] + x * radii[0] * k, center[1] + y * radii[1] * k, center[2] + z * radii[2] * k))
-                d = Vector((self.rng.uniform(-1, 1), self.rng.uniform(-1, 1), self.rng.uniform(-0.6, 0.3) - droop)).normalized()
-                s_ = d.cross(Vector((0.1, 0.2, 1))).normalized()
-                L_ = leaf * self.rng.uniform(0.7, 1.3)
-                W_ = L_ * 0.36
-                v0, v1 = bm.verts.new(p - d * L_ * 0.5), bm.verts.new(p + s_ * W_ * 0.5)
-                v2, v3 = bm.verts.new(p + d * L_ * 0.5), bm.verts.new(p - s_ * W_ * 0.5)
-                bm.faces.new((v0, v1, v2, v3))
+    def _leaf_into(self, bm, p, d, up, L, W):
+        """One folded leaf (2 triangles meeting along the midrib): reads as a real blade, not a flat card."""
+        s_ = d.cross(up)
+        if s_.length < 1e-4:
+            s_ = d.cross(Vector((1, 0, 0)))
+        s_.normalize()
+        n_ = s_.cross(d).normalized()
+        base, tip = p, p + d * L
+        mid = p + d * (L * 0.5) - n_ * (W * 0.16)
+        a_, b_ = bm.verts.new(mid + s_ * W * 0.5), bm.verts.new(mid - s_ * W * 0.5)
+        v0, v1 = bm.verts.new(base), bm.verts.new(tip)
+        bm.faces.new((v0, a_, v1))
+        bm.faces.new((v0, v1, b_))
+
+    def _tube_into(self, bm, pts, r0, r1, seg=6, caps=False):
+        """Tapered round tube through points (branches, vines)."""
+        P = [Vector(p) for p in pts]
+        n = len(P)
+        up = Vector((0.13, 0.27, 0.95)).normalized()
+        rings = []
+        for i, c in enumerate(P):
+            d = (P[min(i + 1, n - 1)] - P[max(i - 1, 0)]).normalized()
+            x = up.cross(d)
+            if x.length < 1e-4:
+                x = Vector((1, 0, 0)).cross(d)
+            x.normalize()
+            y = d.cross(x).normalized()
+            up = y
+            r = r0 + (r1 - r0) * (i / max(1, n - 1))
+            rings.append([bm.verts.new(c + (x * math.cos(2 * math.pi * k / seg) + y * math.sin(2 * math.pi * k / seg)) * r) for k in range(seg)])
+        for a, b in zip(rings, rings[1:]):
+            for k in range(seg):
+                bm.faces.new((a[k], a[(k + 1) % seg], b[(k + 1) % seg], b[k]))
+        if caps:
+            bm.faces.new(rings[-1])
+
+    def _commit_bm(self, bm, name, mat, g, smooth=None):
+        if smooth is not None:
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+            crisp_smooth(bm, smooth)
+        else:
             bm.normal_update()
-            project_uvs(bm)
-            me = bpy.data.meshes.new(name)
-            bm.to_mesh(me); bm.free()
-            o = bpy.data.objects.new(f"{name}_{mi}", me)
-            o.data.materials.append(self.M(mname))
-            g.objects.link(o)
+        project_uvs(bm)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me)
+        bm.free()
+        o = bpy.data.objects.new(name, me)
+        o.data.materials.append(self.M(mat))
+        g.objects.link(o)
+        return o
+
+    def _leaf_cloud(self, name, center, radii, n, leaf=0.06, mats=("leaf_a", "leaf_b", "leaf_c"), coll=None, droop=0.0, core=None, core_k=0.78):
+        """Loose foliage volume made of folded leaves."""
+        g = coll or self._collection("Props")
+        bms = [bmesh.new() for _ in mats]
+        rng = self.rng
+        for i in range(n):
+            while True:
+                x, y, z = rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1)
+                if x * x + y * y + z * z <= 1:
+                    break
+            k = rng.uniform(0.55, 1.0)
+            p = Vector((center[0] + x * radii[0] * k, center[1] + y * radii[1] * k, center[2] + z * radii[2] * k))
+            d = Vector((x + rng.uniform(-0.6, 0.6), y + rng.uniform(-0.6, 0.6), z * 0.5 + rng.uniform(-0.5, 0.3) - droop)).normalized()
+            self._leaf_into(bms[i % len(mats)], p, d, Vector((0, 0, 1)), leaf * rng.uniform(0.75, 1.25), leaf * rng.uniform(0.3, 0.42))
+        for mi, bm in enumerate(bms):
+            self._commit_bm(bm, f"{name}_leaf{mi}", mats[mi], g)
 
     def plant(self, at, h=1.1, pot_r=0.22, name="plant", variant=None):
         """Real potted plant from the library; picks the model closest to height h."""
@@ -1936,20 +2044,50 @@ class Kit:
         self._leaf_cloud(f"{name}_leaf", (at[0], at[1], z + h * 0.65), (pot_r * 1.6, pot_r * 1.6, h * 0.35), 500, 0.09, coll=g)
         return g
 
+    def _grow(self, bark, twigs, leaf_bms, start, d, length, r, level, max_level, leaf_len):
+        """Recursive branching: each limb wanders, tapers and splits; the finest twigs carry the leaves."""
+        rng = self.rng
+        steps = 5 if level < 2 else 3
+        pts = [Vector(start)]
+        cur = Vector(d).normalized()
+        for i in range(steps):
+            cur = (cur + Vector((rng.uniform(-0.28, 0.28), rng.uniform(-0.28, 0.28), rng.uniform(-0.1, 0.22)))).normalized()
+            pts.append(pts[-1] + cur * (length / steps))
+        target = twigs if level == max_level else bark
+        self._tube_into(target, pts, r, r * 0.6, seg={0: 12, 1: 8, 2: 6, 3: 4}.get(level, 3))
+        if level == max_level:
+            n = len(pts)
+            for i in range(120):
+                t = rng.uniform(0.0, 1.0) * (n - 1)
+                a, b = pts[int(t)], pts[min(int(t) + 1, n - 1)]
+                p = a + (b - a) * (t - int(t))
+                side = Vector((rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-0.25, 0.75))).normalized()
+                ld = (cur * 0.55 + side).normalized()
+                self._leaf_into(leaf_bms[rng.randrange(len(leaf_bms))], p, ld, Vector((rng.uniform(-0.4, 0.4), rng.uniform(-0.4, 0.4), 1)), leaf_len * rng.uniform(0.75, 1.2), leaf_len * rng.uniform(0.2, 0.28))
+            return
+        kids = {0: 4, 1: 4, 2: 4, 3: 3}.get(level, 3)
+        for k in range(kids):
+            ti = rng.randint(len(pts) // 2, len(pts) - 1)
+            # limbs fan evenly round the trunk so the crown fills out; finer wood droops slightly like olive
+            a = 6.283 * k / kids + rng.uniform(-0.5, 0.5) + level * 1.1
+            spread = rng.uniform(0.9, 1.35) if level == 0 else rng.uniform(0.6, 1.05)
+            nd = (cur * (1.0 if level == 0 else 0.7) + Vector((math.cos(a) * spread, math.sin(a) * spread, rng.uniform(-0.12, 0.22) - 0.06 * level))).normalized()
+            self._grow(bark, twigs, leaf_bms, pts[ti], nd, length * rng.uniform(0.72, 0.88), r * 0.62, level + 1, max_level, leaf_len)
+
     def olive_tree(self, at, h=2.6, name="olive", pot="pot"):
-        """Olive tree in a big planter: tapering branched trunk, soil, thousands of narrow silver-green leaves."""
+        """Olive tree in a big planter: gnarled trunk splitting into limbs and twigs, thousands of narrow silver-green leaves."""
         g = self._collection("Props")
         self.lathe(f"{name}_pot", [(0, 0), (0.27, 0), (0.36, 0.5), (0.385, 0.53), (0.385, 0.56), (0.335, 0.56), (0.32, 0.5), (0, 0.5)], (at[0], at[1], 0), self.M(pot), 36, g)
         self.cyl(f"{name}_soil", 0.33, 0.012, (at[0], at[1], 0.5), self.M("soil"), 28, coll=g)
-        self.cyl(f"{name}_trunk", 0.06, h * 0.42, (at[0], at[1], 0.5), self.M("bark"), 14, r_top=0.036, coll=g)
-        tz = 0.5 + h * 0.42
-        for k in range(6):
-            a = self.rng.random() * 6.283
-            ln = h * self.rng.uniform(0.18, 0.28)
-            tilt = math.radians(self.rng.uniform(28, 55))
-            ex, ey, ez = math.cos(a) * math.sin(tilt) * ln, math.sin(a) * math.sin(tilt) * ln, math.cos(tilt) * ln
-            self.rod(f"{name}_branch", (at[0], at[1], tz - 0.06), (at[0] + ex, at[1] + ey, tz - 0.06 + ez), 0.016, self.M("bark"), 8, g)
-            self._leaf_cloud(f"{name}_leaves", (at[0] + ex, at[1] + ey, tz + ez), (h * 0.16, h * 0.16, h * 0.12), 760, 0.042, ("leaf_olive", "leaf_olive2"), g)
+        bark, twigs = bmesh.new(), bmesh.new()
+        leaves = [bmesh.new() for _ in range(3)]
+        crown = max(1.2, h - 0.5)
+        self._canopies.append((at[0], at[1], crown * 1.0))
+        self._grow(bark, twigs, leaves, (at[0], at[1], 0.49), (0.05, 0.03, 1.0), crown * 0.36, 0.058, 0, 4, 0.058)
+        self._commit_bm(bark, f"{name}_bark", "bark", g, smooth=60.0)
+        self._commit_bm(twigs, f"{name}_twig", "bark", g, smooth=60.0)
+        for i, (bm, mt) in enumerate(zip(leaves, ("leaf_olive", "leaf_olive2", "leaf_olive3"))):
+            self._commit_bm(bm, f"{name}_leaf{i}", mt, g)
         return g
 
     def umbrella(self, at, size=3.2, h=2.5, name="umbrella", colour="#eee8da"):
@@ -2033,7 +2171,7 @@ class Kit:
         sun_az (optional) = plan angle of the direction TOWARD the sun, degrees CCW from +x (east); sun_elev = degrees above horizon."""
         S = self.scene
         self._mood = mood
-        presets = {"day": (38.0, 3.0, (1.0, 0.96, 0.9), 0.6), "golden": (16.0, 5.0, (1.0, 0.76, 0.52), 1.1), "evening": (-1.0, 0.0, (1.0, 0.6, 0.4), 1.6)}
+        presets = {"day": (32.0, 7.0, (1.0, 0.94, 0.86), 0.42), "golden": (15.0, 8.0, (1.0, 0.72, 0.48), 0.8), "evening": (-1.0, 0.0, (1.0, 0.6, 0.4), 0.9)}
         elev, power, col, sky_strength = presets.get(mood, presets["day"])
         elev = elev if sun_elev is None else sun_elev
         power = power if sun_power is None else sun_power
@@ -2061,6 +2199,7 @@ class Kit:
         else:
             bg.inputs["Color"].default_value = hex_to_linear("#cfdbe6")
         g = self._collection("Lighting")
+        self._window_portals()
         if sun and power > 0 and elev > 0:
             d = bpy.data.lights.new("Sun", "SUN")
             d.energy = power; d.angle = math.radians(1.2); d.color = col
@@ -2086,6 +2225,85 @@ class Kit:
                 o.location = (cx, cy, ch - 0.08)
                 g.objects.link(o)
         return g
+
+    def strip_light(self, a, b, z, direction=(0, 0, -1), watts_per_m=26.0, kelvin=2900, width=0.05, name="strip"):
+        """A real linear light: an LED strip that actually lights what is around it (shelves, coves, kicks, display cases).
+        direction: where it shines, e.g. (0, 0, -1) down, (0, 0, 1) up into a cove, or toward a wall."""
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        if L < 0.05:
+            return None
+        d = bpy.data.lights.new(name, "AREA")
+        d.shape = "RECTANGLE"; d.size = L; d.size_y = width
+        d.energy = watts_per_m * L; d.color = kelvin_to_rgb(kelvin)
+        d.spread = math.radians(150)
+        o = bpy.data.objects.new(f"fill_{name}", d)
+        o.location = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, z)
+        ax = Vector((b[0] - a[0], b[1] - a[1], 0)).normalized()
+        zv = (-Vector(direction)).normalized()          # area lights emit along local -Z
+        yv = zv.cross(ax)
+        if yv.length < 1e-3:
+            ax = Vector((0, 1, 0)).cross(zv).normalized()
+            yv = zv.cross(ax)
+        yv.normalize()
+        ax2 = yv.cross(zv).normalized()
+        from mathutils import Matrix
+        o.rotation_euler = Matrix((ax2, yv, zv)).transposed().to_euler()
+        self._collection("Lighting").objects.link(o)
+        return o
+
+    def wall_wash(self, a, b, z=None, n=None, power=38.0, kelvin=3000, side=1, name="wash"):
+        """Row of recessed wall-washers grazing a feature wall from the ceiling (a→b on the wall face, room on the left). Makes brick, panels and art glow."""
+        (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
+        z = z or max((r.get("ceilingHeight") or 0) for r in self.scene["rooms"]) - 0.03
+        n = n or max(1, int(L / 0.9))
+        g = self._collection("Lighting")
+        for i in range(n):
+            u = L * (i + 0.5) / n
+            x, y = a[0] + ux * u + nx * 0.32, a[1] + uy * u + ny * 0.32
+            self.cyl(f"downlight_{name}", 0.05, 0.015, (x, y, z - 0.012), self.M("lens"), 18, coll=g)
+            d = bpy.data.lights.new(name, "SPOT")
+            d.energy = power; d.spot_size = math.radians(95); d.spot_blend = 0.75; d.color = kelvin_to_rgb(kelvin); d.shadow_soft_size = 0.04
+            o = bpy.data.objects.new(f"fill_{name}", d)
+            o.location = (x, y, z - 0.03)
+            aim = Vector((a[0] + ux * u, a[1] + uy * u, z - 1.3)) - o.location
+            o.rotation_euler = aim.to_track_quat("-Z", "Y").to_euler()
+            g.objects.link(o)
+        return g
+
+    def _window_portals(self):
+        """Cycles light portals in every window: daylight floods in cleanly with a natural falloff across the room."""
+        g = self._collection("Lighting")
+        for w in self.scene["walls"]:
+            ops = [o for o in self.scene.get("openings", []) if o["wallId"] == w["id"] and o["type"] == "window"]
+            if not ops:
+                continue
+            ax, ay = w["a"]; bx, by = w["b"]
+            L = math.hypot(bx - ax, by - ay) or 1.0
+            ux, uy = (bx - ax) / L, (by - ay) / L
+            nx, ny = -uy, ux
+            t = w["thickness"]
+            mx, my = (ax + bx) / 2, (ay + by) / 2
+            r_ = self._room_at(mx + nx * (t / 2 + 0.1), my + ny * (t / 2 + 0.1))
+            if not (r_ and (r_.get("ceilingHeight") or 0) > 0):
+                nx, ny = -nx, -ny
+            for op in ops:
+                sill = op.get("sillHeight") or 0.9
+                c = op["offset"] + op["width"] / 2
+                d = bpy.data.lights.new("portal", "AREA")
+                d.shape = "RECTANGLE"; d.size = op["width"]; d.size_y = op["height"]
+                try:
+                    d.cycles.is_portal = True
+                except Exception:
+                    bpy.data.lights.remove(d)
+                    continue
+                o = bpy.data.objects.new("fill_portal", d)
+                o.location = (ax + ux * c + nx * (t / 2 + 0.02), ay + uy * c + ny * (t / 2 + 0.02), sill + op["height"] / 2)
+                zv = Vector((-nx, -ny, 0))        # local -Z points into the room
+                from mathutils import Matrix
+                xv = Vector((0, 0, 1)).cross(zv).normalized()
+                yv = zv.cross(xv).normalized()
+                o.rotation_euler = Matrix((xv, yv, zv)).transposed().to_euler()
+                g.objects.link(o)
 
     # ---------------- decorative architecture ----------------
     def fluted_panel(self, a, b, z0=0.0, z1=2.4, mat="walnut", style="fluted", side=1, name="fluted"):
@@ -2189,6 +2407,7 @@ class Kit:
             self.box(f"{name}_shelf", (w, 0.14, 0.025), (at[0] + nx * 0.075, at[1] + ny * 0.075, sz), rot, self.M(frame), g)
             if led:
                 self.box(f"{name}_led", (w - 0.06, 0.008, 0.006), (at[0] + nx * 0.12, at[1] + ny * 0.12, sz - 0.018), rot, self.M("led"), g, bevel=0)
+                self.strip_light((at[0] - ux * w / 2 + nx * 0.1, at[1] - uy * w / 2 + ny * 0.1), (at[0] + ux * w / 2 + nx * 0.1, at[1] + uy * w / 2 + ny * 0.1), sz - 0.022, (-nx * 0.4, -ny * 0.4, -1), 8.0, name=f"{name}_shelf")
             n = max(2, int(w / 0.16))
             bm = bmesh.new()
             for k in range(n):
@@ -2403,6 +2622,7 @@ class Kit:
         """Eye-level camera at plan point `at` looking at plan point `look_at` at height look_z."""
         cam = bpy.data.cameras.new(name)
         cam.lens_unit = "FOV"
+        cam.clip_start = 0.3    # stray leaves right at the lens never fill the frame
         cam.angle = math.radians(fov)
         o = bpy.data.objects.new(name, cam)
         o.location = (at[0], at[1], eye)
@@ -2415,7 +2635,7 @@ class Kit:
         return o
 
     def _exposure(self):
-        return {"day": 0.75, "golden": 0.9, "evening": 1.05}.get(self._mood, 0.75)
+        return {"day": 0.85, "golden": 0.8, "evening": 1.05}.get(self._mood, 0.85)
 
     def finish(self, engine="CYCLES", samples=96, res=(1600, 900)):
         """Render settings. Live Blender keeps EEVEE for interaction; headless renders use Cycles."""
@@ -2428,6 +2648,14 @@ class Kit:
         sc.render.resolution_percentage = 100
         if engine == "CYCLES":
             sc.cycles.samples = samples
+            sc.cycles.max_bounces = 14
+            sc.cycles.diffuse_bounces = 8        # interiors live on bounced light
+            sc.cycles.glossy_bounces = 6
+            sc.cycles.transmission_bounces = 12
+            sc.cycles.sample_clamp_indirect = 8.0  # no fireflies from small hot sources
+            sc.cycles.caustics_reflective = False
+            sc.cycles.caustics_refractive = False
+            sc.cycles.blur_glossy = 1.0
             try:
                 sc.cycles.use_denoising = True
             except Exception:
@@ -2461,9 +2689,23 @@ class Kit:
             except TypeError:
                 continue
         sc.view_settings.exposure = self._exposure()
+        for o in sc.objects:      # Cycles shadow rays stop at glass: without this no sun or sky ever reaches a room directly
+            if o.type == "MESH" and o.data.materials and all(m and m.use_nodes and _principled(m).inputs["Transmission Weight"].default_value > 0.5 for m in o.data.materials):
+                o.visible_shadow = False
         for o in bpy.context.selected_objects:
             o.select_set(False)
         return sc
+
+    def _clear_of_canopies(self, cam):
+        """A photographer never shoots from inside a tree: step the camera out along its own axis until the leaves are behind it."""
+        fw = (cam.rotation_euler.to_matrix() @ Vector((0, 0, -1)))
+        fw = Vector((fw.x, fw.y, 0)).normalized()
+        for _ in range(30):
+            p = cam.location
+            near = [(x, y, r) for x, y, r in self._canopies if math.hypot(p.x - x, p.y - y) < r and (Vector((x - p.x, y - p.y, 0))).dot(fw) > -0.2]
+            if not near:
+                return
+            cam.location = p + fw * 0.15
 
     def render_stills(self, out_dir, samples=96, res=(1600, 900)):
         """Render every camera created with camera() to out_dir; prints STILL_TOTAL/STILL_DONE markers."""
@@ -2474,9 +2716,10 @@ class Kit:
         out = []
         for i, (cam, label) in enumerate(self.cameras):
             sc.camera = cam
+            self._clear_of_canopies(cam)
             room = self._room_at(cam.location.x, cam.location.y)
             indoors = bool(room and (room.get("ceilingHeight") or 0) > 0)
-            sc.view_settings.exposure = self._exposure() if indoors else self._exposure() - {"day": 1.55, "golden": 1.5, "evening": 0.3}.get(self._mood, 1.5)
+            sc.view_settings.exposure = self._exposure() if indoors else self._exposure() - {"day": 1.55, "golden": 1.45, "evening": 0.3}.get(self._mood, 1.5)
             fn = f"still_{i:02d}.jpg"
             sc.render.image_settings.file_format = "JPEG"
             sc.render.image_settings.quality = 92
@@ -2523,41 +2766,73 @@ class Kit:
         bpy.ops.wm.save_as_mainfile(filepath=path)
         return path
 
-    def _web_lod(self, leaf_keep=0.3, target=170000):
-        """Lighten the walkable model only (the export runs after renders): thin foliage cards, enlarging what remains so
-        the mass reads the same, and decimate dense meshes until the whole scene is near `target` triangles."""
+    def _web_lod(self, target=230000):
+        """Lighten the walkable model only (the export runs after renders). Library models swap to their authored low-detail
+        versions (assets/models_web: clean round tubes, never crushed); foliage thins with larger leaves; fine twigs drop out.
+        Only what remains over budget (props like cup rows, scanned plants) is decimated."""
+        web_dir = os.path.join(self.assets_root, "models_web")
+        cache = {}
+        for (o, file, idx) in self._placed:
+            path = os.path.join(web_dir, file)
+            if file not in cache:
+                cache[file] = None
+                if os.path.isfile(path):
+                    before = set(bpy.data.objects)
+                    bpy.ops.import_scene.gltf(filepath=path)
+                    new = [x for x in bpy.data.objects if x not in before]
+                    cache[file] = [x.data for x in new if x.type == "MESH"]
+                    for x in new:
+                        for c in list(x.users_collection):
+                            c.objects.unlink(x)
+            if cache[file] and idx < len(cache[file]):
+                o.data = cache[file][idx]
         import random as _r
         rnd = _r.Random(5)
-        seen = set()
-        for o in bpy.data.objects:
-            if o.type != "MESH" or o.data in seen or "_leaf" not in o.name and "_trail" not in o.name:
-                continue
-            if o.name.endswith("_core") or "core" in o.name:
-                continue
-            seen.add(o.data)
-            bm = bmesh.new()
-            bm.from_mesh(o.data)
-            kill = [f for f in bm.faces if rnd.random() > leaf_keep]
-            bmesh.ops.delete(bm, geom=kill, context="FACES")
-            k = (1.0 / leaf_keep) ** 0.5
-            for f in bm.faces:
-                c = f.calc_center_median()
-                for v in f.verts:
-                    v.co = c + (v.co - c) * k
-            bm.to_mesh(o.data)
-            bm.free()
         def tris(ob):
             return sum(len(p.vertices) - 2 for p in ob.data.polygons)
-        meshes = [o for o in self.sc.objects if o.type == "MESH" and not o.name.startswith(("floor_", "wall_", "ceiling_"))]
+        for o in list(self.sc.objects):
+            if o.type != "MESH":
+                continue
+            if "_twig" in o.name:
+                bpy.data.objects.remove(o, do_unlink=True)
+                continue
+            if "_leaf" in o.name or "_crown" in o.name:
+                keep = 0.07 if ("hedge" in o.name or "box" in o.data.materials[0].name) else 0.2
+                bm = bmesh.new()
+                bm.from_mesh(o.data)
+                bm.faces.ensure_lookup_table()
+                faces = list(bm.faces)
+                kill = []
+                k = min(2.4, (1.0 / keep) ** 0.5)
+                for i in range(0, len(faces) - 1, 2):      # a leaf is two faces
+                    pair = faces[i:i + 2]
+                    if rnd.random() > keep:
+                        kill += pair
+                    else:
+                        vs = {v for f in pair for v in f.verts}
+                        c = sum((v.co for v in vs), Vector((0, 0, 0))) / len(vs)
+                        for v in vs:
+                            v.co = c + (v.co - c) * k
+                bmesh.ops.delete(bm, geom=kill, context="FACES")
+                bm.to_mesh(o.data)
+                bm.free()
         total = sum(tris(o) for o in self.sc.objects if o.type == "MESH")
-        if total > target:
-            ratio = max(0.2, target / total)
-            for o in meshes:
-                if tris(o) > 250 and "_leaf" not in o.name and "_trail" not in o.name:
-                    m = o.modifiers.new("web", "DECIMATE")
-                    m.decimate_type = "COLLAPSE"
-                    m.ratio = ratio
-        print(f"WEB_LOD tris_before_decimate={total} ratio={min(1.0, target / max(total, 1)):.2f}", flush=True)
+        swapped = {o.name for (o, f, i) in self._placed if cache.get(f)}
+        by = {}
+        file_of = {o.name: f for (o, f, i) in self._placed}
+        for o in self.sc.objects:
+            if o.type != "MESH":
+                continue
+            f = file_of.get(o.name, "")
+            ratio = 0.2 if f.startswith("plant/") else 0.13 if f.startswith("pastry/") else 0.3 if "cups" in o.name else 0.45 if (f and o.name not in swapped) else None
+            if ratio and tris(o) > 300:
+                m = o.modifiers.new("web", "DECIMATE")
+                m.decimate_type = "COLLAPSE"
+                m.ratio = ratio
+                by[o.name.split("_")[0]] = by.get(o.name.split("_")[0], 0) + 1
+        dg = bpy.context.evaluated_depsgraph_get()
+        after = sum(len(o.evaluated_get(dg).to_mesh().polygons) * 1 for o in self.sc.objects if o.type == "MESH")
+        print(f"WEB_LOD before={total} faces_after={after}", flush=True)
 
     def export_glb(self, path, lights=True, web_tex=512):
         """Web-weight GLB of the whole café (WebP textures, lights included). Blender (x, y, z) exports
