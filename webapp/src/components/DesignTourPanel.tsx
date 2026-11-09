@@ -71,7 +71,7 @@ export default function DesignTourPanel({
   onBlenderResult: (r: BlenderResult) => void;
 }) {
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
-  const [direction, setDirection] = useState(""); // "" = surprise me: the server picks a direction not used recently
+  const [direction, setDirection] = useState("coffeeberry"); // the client's brand standard; "surprise" = server picks a direction not used recently
   const [output, setOutput] = useState<OutputKind>("blender");
   const [renderMode, setRenderMode] = useState<"glb" | "stills" | "both">("glb");
   const [percent, setPercent] = useState<number | undefined>(undefined);
@@ -367,7 +367,7 @@ export default function DesignTourPanel({
             <section style={S.card}>
               <div style={S.label}>4 · Design style</div>
               <select style={{ ...S.textarea, height: "auto", marginBottom: 8 }} value={direction} onChange={(e) => setDirection(e.target.value)}>
-                <option value="">✨ Surprise me: a different design every run</option>
+                <option value="surprise">✨ Surprise me: a different design every run</option>
                 {DIRECTIONS.map((d) => <option key={d.id} value={d.id}>{d.name}: {d.summary}</option>)}
               </select>
               <textarea style={S.textarea} rows={3} placeholder="Optional brief: colours, brand, anything you want (overrides the style)" value={brief} onChange={(e) => setBrief(e.target.value)} />

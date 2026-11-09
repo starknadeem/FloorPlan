@@ -95,7 +95,12 @@ export const MODEL_CATALOG: Record<string, ModelDef> = {
   // ── Custom café library (webapp/public/models/custom/) ───────────────────────────
   // Directional pieces face +Z after glTF export → use F (180°); radially-symmetric → 0.
   cafe_chair: { url: `${C}/chair.glb`, baseRotationDeg: F, fit: "contain" },
-  cafe_table: { url: `${C}/table.glb`, baseRotationDeg: 0, fit: "contain" },
+  cafe_table: { url: `${C}/table.glb`, baseRotationDeg: 0, fit: "contain" }, // client: Omicron pedestal, 60x60 top
+  // Coffee Berry (client) standard furniture — webapp/blender/client_models.py builds these from 3DModels/
+  cafe_stool: { url: `${C}/stool.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_chair_outdoor: { url: `${C}/chairOutdoor.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_table_round: { url: `${C}/tableRound.glb`, baseRotationDeg: 0, fit: "contain" },
+  cafe_table_stand: { url: `${C}/tableStand.glb`, baseRotationDeg: 0, fit: "stretch" },
   cafe_counter: { url: `${C}/counter.glb`, baseRotationDeg: F, fit: "stretch" },
   cafe_cart: { url: `${C}/coffeeCart.glb`, baseRotationDeg: F, fit: "contain" },
   cafe_sink: { url: `${C}/sink.glb`, baseRotationDeg: F, fit: "contain" },
@@ -126,7 +131,7 @@ export const MODEL_CATALOG: Record<string, ModelDef> = {
 export const MODEL_REGISTRY: Partial<Record<FixtureCategory, ModelDef>> = {
   // Café-specific custom models now lead; Kenney kept as fallback/variants.
   chair: MODEL_CATALOG.cafe_chair,
-  stool: MODEL_CATALOG.stool_bar,
+  stool: MODEL_CATALOG.cafe_stool,
   sofa: MODEL_CATALOG.sofa,
   banquette: MODEL_CATALOG.bench_cushion,
   table: MODEL_CATALOG.cafe_table, // round bistro (real oak); revert to parametric by removing this line
@@ -158,11 +163,11 @@ export const MODEL_REGISTRY: Partial<Record<FixtureCategory, ModelDef>> = {
 
 /** Which catalog keys the AI layout pass may choose from, per category. */
 export const VARIANTS_BY_CATEGORY: Partial<Record<FixtureCategory, string[]>> = {
-  chair: ["cafe_chair", "chair_cushion", "chair_wood"],
-  stool: ["stool_bar"],
+  chair: ["cafe_chair", "cafe_chair_outdoor"],
+  stool: ["cafe_stool", "stool_bar"],
   sofa: ["sofa", "sofa_long"],
   banquette: ["bench_cushion", "sofa_long"],
-  table: ["cafe_table", "table_rect"],
+  table: ["cafe_table", "cafe_table_round", "cafe_table_stand"],
   counter: ["cafe_counter"],
   cashier: ["cafe_pos"],
   fridge: ["cafe_fridge", "fridge", "fridge_large"],

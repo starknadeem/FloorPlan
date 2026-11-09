@@ -2,321 +2,44 @@
  "_comment": "Library used by cafe_kit Kit.place(). Every model: base z=0, centred, front faces -Y, true size in metres. Custom models are rebuilt by blender/author_models.py; Poly Haven (CC0) ones by blender/curate_asset.py. style_tags drive which variants a design style may pick.",
  "chair": [
   {
-   "variant": "dining_leather",
-   "file": "chair/dining_leather.glb",
+   "variant": "cb_chair_pasadena",
+   "file": "client/cb_chair_pasadena.glb",
    "footprint": [
-    0.433,
-    0.576
+    0.507,
+    0.525
    ],
-   "height": 0.973,
+   "height": 0.8,
    "forward_deg": 0,
    "fit": "real",
+   "brand": "coffeeberry",
    "style_tags": [
-    "deco",
-    "cozy"
+    "any"
    ],
-   "tris": 6499,
-   "source": "polyhaven:dining_chair_02",
-   "license": "CC0"
-  },
-  {
-   "variant": "dining_light",
-   "file": "chair/dining_light.glb",
-   "footprint": [
-    0.432,
-    0.54
-   ],
-   "height": 0.956,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "mediterranean",
-    "bistro",
-    "cozy"
-   ],
-   "tris": 724,
-   "source": "polyhaven:painted_wooden_chair_01",
-   "license": "CC0"
-  },
-  {
-   "variant": "bentwood_walnut",
-   "file": "chair/bentwood_walnut.glb",
-   "footprint": [
-    0.427,
-    0.571
-   ],
-   "height": 0.931,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "bistro",
-    "cozy",
-    "midcentury",
-    "deco",
-    "mediterranean"
-   ],
-   "tris": 2844,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "bentwood_black",
-   "file": "chair/bentwood_black.glb",
-   "footprint": [
-    0.427,
-    0.571
-   ],
-   "height": 0.931,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "bistro",
-    "deco",
-    "modern",
-    "industrial"
-   ],
-   "tris": 2844,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "bentwood_oak",
-   "file": "chair/bentwood_oak.glb",
-   "footprint": [
-    0.427,
-    0.571
-   ],
-   "height": 0.931,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "scandinavian",
-    "japandi",
-    "cozy",
-    "biophilic"
-   ],
-   "tris": 2844,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "shell_oak",
-   "file": "chair/shell_oak.glb",
-   "footprint": [
-    0.473,
-    0.581
-   ],
-   "height": 0.856,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "scandinavian",
-    "japandi",
-    "modern",
-    "midcentury",
-    "biophilic"
-   ],
-   "tris": 2120,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "shell_walnut",
-   "file": "chair/shell_walnut.glb",
-   "footprint": [
-    0.473,
-    0.581
-   ],
-   "height": 0.856,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "midcentury",
-    "retro",
-    "deco",
-    "cozy"
-   ],
-   "tris": 2120,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "shell_black",
-   "file": "chair/shell_black.glb",
-   "footprint": [
-    0.473,
-    0.581
-   ],
-   "height": 0.856,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "brutalist",
-    "modern",
-    "industrial"
-   ],
-   "tris": 2120,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "metal_black",
-   "file": "chair/metal_black.glb",
-   "footprint": [
-    0.504,
-    0.514
-   ],
-   "height": 0.861,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "industrial",
-    "brutalist",
-    "bistro"
-   ],
-   "tris": 1644,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "metal_olive",
-   "file": "chair/metal_olive.glb",
-   "footprint": [
-    0.504,
-    0.514
-   ],
-   "height": 0.861,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "industrial",
-    "biophilic",
-    "retro"
-   ],
-   "tris": 1644,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "metal_mustard",
-   "file": "chair/metal_mustard.glb",
-   "footprint": [
-    0.504,
-    0.514
-   ],
-   "height": 0.861,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "retro",
-    "mediterranean"
-   ],
-   "tris": 1644,
-   "source": "custom:author_models.py",
-   "license": "CC0"
+   "tris": 30000,
+   "source": "client:3DModels/cb_chair_pasadena.glb",
+   "license": "client-owned",
+   "_kb": 923
   }
  ],
  "stool": [
   {
-   "variant": "bar_wood",
-   "file": "stool/bar_wood.glb",
+   "variant": "cb_semistool_pasadena",
+   "file": "client/cb_semistool_pasadena.glb",
    "footprint": [
-    0.483,
-    0.485
+    0.453,
+    0.453
    ],
-   "height": 0.75,
+   "height": 0.95,
    "forward_deg": 0,
    "fit": "real",
+   "brand": "coffeeberry",
    "style_tags": [
-    "bistro",
-    "cozy",
-    "retro"
+    "any"
    ],
-   "tris": 5000,
-   "source": "polyhaven:bar_chair_round_01",
-   "license": "CC0"
-  },
-  {
-   "variant": "leather_black",
-   "file": "stool/leather_black.glb",
-   "footprint": [
-    0.382,
-    0.382
-   ],
-   "height": 0.766,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "industrial",
-    "deco",
-    "bistro",
-    "cozy",
-    "retro",
-    "midcentury"
-   ],
-   "tris": 1368,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "leather_white",
-   "file": "stool/leather_white.glb",
-   "footprint": [
-    0.382,
-    0.382
-   ],
-   "height": 0.766,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "modern",
-    "scandinavian",
-    "brutalist",
-    "mediterranean"
-   ],
-   "tris": 1368,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "oak",
-   "file": "stool/oak.glb",
-   "footprint": [
-    0.423,
-    0.423
-   ],
-   "height": 0.763,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "scandinavian",
-    "japandi",
-    "biophilic",
-    "cozy"
-   ],
-   "tris": 700,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "walnut",
-   "file": "stool/walnut.glb",
-   "footprint": [
-    0.423,
-    0.423
-   ],
-   "height": 0.763,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "midcentury",
-    "cozy",
-    "mediterranean",
-    "retro"
-   ],
-   "tris": 700,
-   "source": "custom:author_models.py",
-   "license": "CC0"
+   "tris": 30000,
+   "source": "client:3DModels/cb_semistool_pasadena.glb",
+   "license": "client-owned",
+   "_kb": 843
   }
  ],
  "plant": [
@@ -379,108 +102,23 @@
  ],
  "espresso": [
   {
-   "variant": "steel_2g",
-   "file": "equipment/espresso_steel.glb",
+   "variant": "cb_espresso_lacimbali_3g",
+   "file": "client/cb_espresso_lacimbali_3g.glb",
    "footprint": [
-    0.96,
-    0.648
+    1.03,
+    0.727
    ],
-   "height": 0.586,
+   "height": 0.596,
    "forward_deg": 0,
    "fit": "real",
+   "brand": "coffeeberry",
    "style_tags": [
-    "industrial",
-    "brutalist",
-    "modern",
-    "japandi",
-    "scandinavian"
+    "any"
    ],
-   "tris": 6400,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "black_2g",
-   "file": "equipment/espresso_black.glb",
-   "footprint": [
-    0.96,
-    0.648
-   ],
-   "height": 0.586,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "deco",
-    "modern",
-    "industrial",
-    "brutalist",
-    "midcentury"
-   ],
-   "tris": 6400,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "sage_2g",
-   "file": "equipment/espresso_sage.glb",
-   "footprint": [
-    0.96,
-    0.648
-   ],
-   "height": 0.586,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "biophilic",
-    "scandinavian",
-    "japandi",
-    "cozy",
-    "mediterranean"
-   ],
-   "tris": 6400,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "cream_2g",
-   "file": "equipment/espresso_cream.glb",
-   "footprint": [
-    0.96,
-    0.648
-   ],
-   "height": 0.586,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "bistro",
-    "retro",
-    "mediterranean",
-    "cozy",
-    "midcentury"
-   ],
-   "tris": 6400,
-   "source": "custom:author_models.py",
-   "license": "CC0"
-  },
-  {
-   "variant": "terra_3g",
-   "file": "equipment/espresso_terra.glb",
-   "footprint": [
-    1.23,
-    0.648
-   ],
-   "height": 0.586,
-   "forward_deg": 0,
-   "fit": "real",
-   "style_tags": [
-    "retro",
-    "mediterranean",
-    "biophilic",
-    "cozy"
-   ],
-   "tris": 7732,
-   "source": "custom:author_models.py",
-   "license": "CC0"
+   "tris": 60000,
+   "source": "client:3DModels/cb_espresso_lacimbali_3g.glb",
+   "license": "client-owned",
+   "_kb": 2258
   }
  ],
  "pastry": [
@@ -1160,32 +798,23 @@
  ],
  "grinder": [
   {
-   "variant": "conical",
-   "file": "equipment/grinder.glb",
+   "variant": "cb_grinder_fiorenzato",
+   "file": "client/cb_grinder_fiorenzato.glb",
    "footprint": [
-    0.22,
-    0.368
+    0.253,
+    0.421
    ],
-   "height": 0.632,
+   "height": 0.62,
    "forward_deg": 0,
    "fit": "real",
+   "brand": "coffeeberry",
    "style_tags": [
-    "industrial",
-    "scandinavian",
-    "japandi",
-    "bistro",
-    "mediterranean",
-    "deco",
-    "midcentury",
-    "biophilic",
-    "brutalist",
-    "retro",
-    "modern",
-    "cozy"
+    "any"
    ],
-   "tris": 1620,
-   "source": "custom:author_models.py",
-   "license": "CC0"
+   "tris": 30000,
+   "source": "client:3DModels/cb_grinder_fiorenzato.glb",
+   "license": "client-owned",
+   "_kb": 1196
   }
  ],
  "blender": [
@@ -1546,6 +1175,267 @@
    "tris": 200,
    "source": "custom:author_models.py",
    "license": "CC0"
+  }
+ ],
+ "chair_outdoor": [
+  {
+   "variant": "cb_chair_balfour",
+   "file": "client/cb_chair_balfour.glb",
+   "footprint": [
+    0.623,
+    0.587
+   ],
+   "height": 0.78,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 30000,
+   "source": "client:3DModels/cb_chair_balfour.glb",
+   "license": "client-owned",
+   "_kb": 1172
+  }
+ ],
+ "table_round": [
+  {
+   "variant": "cb_table_round",
+   "file": "client/cb_table_round.glb",
+   "footprint": [
+    0.8,
+    0.8
+   ],
+   "height": 0.75,
+   "forward_deg": 0,
+   "fit": "stretch",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 10000,
+   "source": "client:3DModels/cb_table_round.glb",
+   "license": "client-owned",
+   "_kb": 321
+  }
+ ],
+ "table_square": [
+  {
+   "variant": "cb_table_semistand",
+   "file": "client/cb_table_semistand.glb",
+   "footprint": [
+    0.6,
+    0.6
+   ],
+   "height": 0.92,
+   "forward_deg": 0,
+   "fit": "stretch",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 10000,
+   "source": "client:3DModels/cb_table_semistand.glb",
+   "license": "client-owned",
+   "_kb": 338
+  }
+ ],
+ "table_high": [
+  {
+   "variant": "cb_table_stand",
+   "file": "client/cb_table_stand.glb",
+   "footprint": [
+    1.6,
+    0.6
+   ],
+   "height": 1.05,
+   "forward_deg": 0,
+   "fit": "stretch",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 10000,
+   "source": "client:3DModels/cb_table_stand.glb",
+   "license": "client-owned",
+   "_kb": 336
+  }
+ ],
+ "cup": [
+  {
+   "variant": "cb_cup_paper",
+   "file": "client/cb_cup_paper.glb",
+   "footprint": [
+    0.096,
+    0.095
+   ],
+   "height": 0.12,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 5000,
+   "source": "client:3DModels/cb_cup_paper.glb",
+   "license": "client-owned",
+   "_kb": 172
+  }
+ ],
+ "merch": [
+  {
+   "variant": "cb_tin_round",
+   "file": "client/cb_tin_round.glb",
+   "footprint": [
+    0.118,
+    0.118
+   ],
+   "height": 0.12,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 5000,
+   "source": "client:3DModels/cb_tin_round.glb",
+   "license": "client-owned",
+   "_kb": 248
+  },
+  {
+   "variant": "cb_bag_premium",
+   "file": "client/cb_bag_premium.glb",
+   "footprint": [
+    0.171,
+    0.111
+   ],
+   "height": 0.3,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 5000,
+   "source": "client:3DModels/cb_bag_premium.glb",
+   "license": "client-owned",
+   "_kb": 218
+  },
+  {
+   "variant": "cb_tin_aaamosa",
+   "file": "client/cb_tin_aaamosa.glb",
+   "footprint": [
+    0.17,
+    0.096
+   ],
+   "height": 0.157,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 5000,
+   "source": "client:3DModels/cb_tin_aaamosa.glb",
+   "license": "client-owned",
+   "_kb": 339
+  },
+  {
+   "variant": "cb_box_no10",
+   "file": "client/cb_box_no10.glb",
+   "footprint": [
+    0.11,
+    0.078
+   ],
+   "height": 0.17,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 3000,
+   "source": "client:3DModels/cb_box_no10.glb",
+   "license": "client-owned",
+   "_kb": 126
+  },
+  {
+   "variant": "cb_box_pearl_capsules",
+   "file": "client/cb_box_pearl_capsules.glb",
+   "footprint": [
+    0.065,
+    0.041
+   ],
+   "height": 0.14,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 3000,
+   "source": "client:3DModels/cb_box_pearl_capsules.glb",
+   "license": "client-owned",
+   "_kb": 230
+  },
+  {
+   "variant": "cb_travel_mug_white",
+   "file": "client/cb_travel_mug_white.glb",
+   "footprint": [
+    0.093,
+    0.093
+   ],
+   "height": 0.18,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 5000,
+   "source": "client:3DModels/cb_travel_mug_white.glb",
+   "license": "client-owned",
+   "_kb": 227
+  },
+  {
+   "variant": "cb_tumbler_black",
+   "file": "client/cb_tumbler_black.glb",
+   "footprint": [
+    0.094,
+    0.095
+   ],
+   "height": 0.13,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 5000,
+   "source": "client:3DModels/cb_tumbler_black.glb",
+   "license": "client-owned",
+   "_kb": 224
+  }
+ ],
+ "syrup": [
+  {
+   "variant": "cb_syrup_peach",
+   "file": "client/cb_syrup_peach.glb",
+   "footprint": [
+    0.093,
+    0.094
+   ],
+   "height": 0.32,
+   "forward_deg": 0,
+   "fit": "real",
+   "brand": "coffeeberry",
+   "style_tags": [
+    "any"
+   ],
+   "tris": 5000,
+   "source": "client:3DModels/cb_syrup_peach.glb",
+   "license": "client-owned",
+   "_kb": 230
   }
  ]
 }

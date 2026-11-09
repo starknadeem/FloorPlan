@@ -167,16 +167,39 @@ function tableSeats(t: Fixture): { pos: Vec2; rot: number }[] {
  * cluster per table. Bar stools and everything else are kept as-is. Returns a new scene.
  */
 export function rearrangeSeating(scene: CafeScene): CafeScene {
-  const keep = scene.fixtures.filter((f) => f.category !== "chair");
+  // The plan's own chairs are the client's layout: keep them (dropping only exact duplicates and chairs that sit
+  // inside a table). Chairs are generated ONLY for tables the parser drew no seats for. (This used to drop every
+  // parsed chair and regenerate them, which halved the indoor seating and scrambled the terrace.)
+  const tablesAll = scene.fixtures.filter((f) => f.category === "table");
+  const insideTable = (p: [number, number]) => tablesAll.some((t) => {
+    const [w, d] = t.footprint;
+    const r = ((t.rotation ?? 0) * Math.PI) / 180;
+    const dx = p[0] - t.position[0], dy = p[1] - t.position[1];
+    const lx = dx * Math.cos(r) + dy * Math.sin(r), ly = -dx * Math.sin(r) + dy * Math.cos(r);
+    return Math.abs(lx) < w / 2 - 0.05 && Math.abs(ly) < d / 2 - 0.05;
+  });
+  const planChairs: Fixture[] = [];
+  for (const c of scene.fixtures) {
+    if (c.category !== "chair") continue;
+    if (insideTable(c.position)) continue;
+    if (planChairs.some((k) => Math.hypot(k.position[0] - c.position[0], k.position[1] - c.position[1]) < 0.3)) continue;
+    planChairs.push(c);
+  }
+  const keep = [...scene.fixtures.filter((f) => f.category !== "chair"), ...planChairs];
   const occ: Disc[] = keep.map((f) => discOf(f.position, f.footprint[0], f.footprint[1]));
   const seats: Fixture[] = [];
   let i = 0;
+  const seatedByPlan = (t: Fixture) => {
+    const reach = Math.max(t.footprint[0], t.footprint[1]) / 2 + 0.75;
+    return keep.some((c) => (c.category === "chair" || c.category === "stool") &&
+      Math.hypot(c.position[0] - t.position[0], c.position[1] - t.position[1]) < reach);
+  };
   const roomOfTable = (t: Fixture): Room | undefined =>
     scene.rooms.find((r) => r.id === t.roomId) ??
     scene.rooms.find((r) => r.polygon.length >= 3 && pointInPoly(r.polygon, t.position[0], t.position[1]));
 
   for (const t of scene.fixtures) {
-    if (t.category !== "table") continue;
+    if (t.category !== "table" || seatedByPlan(t)) continue;
     const room = roomOfTable(t);
     for (const s of tableSeats(t)) {
       if (room && room.polygon.length >= 3 && !pointInPoly(room.polygon, s.pos[0], s.pos[1])) continue;

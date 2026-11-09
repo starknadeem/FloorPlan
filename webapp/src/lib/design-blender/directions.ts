@@ -12,7 +12,22 @@ export interface DesignDirection {
   spec: string;
 }
 
+/** The client's own shop standard (Coffee Berry): what every new store is built with. Default for every run. */
+export const BRAND_DIRECTION: DesignDirection = {
+  id: "coffeeberry", name: "Coffee Berry Standard", style: "modern", mood: "day",
+  summary: "The client's brand: light oak + black marble bar, cream walls, black accents, grey tile",
+  spec: `This is the CLIENT'S OWN BRAND STANDARD, taken from their built shops and material schedule: reproduce it faithfully, do not reinterpret it.
+Floors: architecture(floors=...) "cb_floor" (Soulant grey 60x120) in the shop and WC, "cb_prep_floor" (Ariman grey 30x60) in preparation/kitchen, floor_zone "cb_bar_tile" (COEM Sassiepietre Grigio 90x90) behind the bar. Terrace: "paving".
+Ceiling: "rockfon" (seamless white acoustic) everywhere with recessed downlights; WC/prep plain "plaster_white".
+Walls: warm cream "#efe4cf" in the shop; WC walls "cb_floor" tile to full height; prep "tile_white" dado. Black "#1b1b1b" for door frames, columns and the window frames.
+Bar: counter_run top "cb_oak", front "panel:cb_marble_black" (black marble look), black plinth, no LED kick colour other than warm white; back_bar body "cb_oak" with doors "#1b1b1b", top "cb_oak", splash "cb_marble_black" up to 1.5 m. An oak panel with the coffee-bean dispenser tubes and a wall TV menu_screen over the back bar. Black metal retail shelving_wall where the plan has retail/display.
+Light: black dome pendants with warm bulbs over the bar and tables (pendant dome_black), recessed spots, warm 3000 K. Signage: the "coffee berry" logo sign, backlit, on the facade fascia and one interior wall (K.sign("coffee berry", ...)).
+Terrace: cream umbrellas "#efe4cf" over the plan's table clusters, grey concrete planters along the edge.
+No rattan, no arches, no velvet, no neon, no gallery walls: the brand is clean, warm and simple.`,
+};
+
 export const DIRECTIONS: DesignDirection[] = [
+  BRAND_DIRECTION,
   {
     id: "japandi", name: "Japandi Calm", style: "japandi", mood: "day",
     summary: "Pale oak, washi white, tatami, quiet black accents",
@@ -82,7 +97,7 @@ export function directionById(id?: string | null): DesignDirection | undefined {
 /** Random direction avoiding the most recent ones (`recent` = newest first). */
 export function pickDirection(recent: string[], avoid = 6): DesignDirection {
   const blocked = new Set(recent.slice(0, Math.min(avoid, DIRECTIONS.length - 2)));
-  const pool = DIRECTIONS.filter((d) => !blocked.has(d.id));
+  const pool = DIRECTIONS.filter((d) => d.id !== BRAND_DIRECTION.id && !blocked.has(d.id));
   return pool[Math.floor(Math.random() * pool.length)];
 }
 

@@ -15,7 +15,7 @@ import crypto from "node:crypto";
 import net from "node:net";
 import type { CafeScene } from "@/types/cafescene";
 import { DESIGN_BLENDER_SYSTEM, buildBlenderUserText, loadKitAndExemplar } from "@/lib/design-blender/prompt";
-import { LAYOUTS, directionById, pickDirection } from "@/lib/design-blender/directions";
+import { BRAND_DIRECTION, LAYOUTS, directionById, pickDirection } from "@/lib/design-blender/directions";
 import { startImageJob } from "@/lib/design-images/job";
 
 export const maxDuration = 300;
@@ -167,15 +167,23 @@ export async function POST(req: Request) {
 
   // every run: a fresh seed and a design direction that differs from the recent ones, so the same plan never repeats
   const recent = await recentDirections();
-  const direction = directionById(body.direction) ?? pickDirection(recent);
+  // the client's brand standard unless another direction is asked for; "surprise" = random, not used recently
+  const direction = body.direction === "surprise" ? pickDirection(recent) : directionById(body.direction) ?? BRAND_DIRECTION;
   const layout = LAYOUTS[Math.floor(Math.random() * LAYOUTS.length)];
   const seed = Math.floor(Math.random() * 2 ** 31);
 
-  const { kit, exemplar } = await loadKitAndExemplar();
+  const isBrand = direction.id === BRAND_DIRECTION.id;
+  const { kit, exemplar } = await loadKitAndExemplar(isBrand);
   const system: Anthropic.Beta.BetaTextBlockParam[] = [
     { type: "text", text: DESIGN_BLENDER_SYSTEM },
     { type: "text", text: `=== cafe_kit.py (the API you build with) ===\n${kit}` },
-    { type: "text", text: `=== EXEMPLAR design.py (API usage and level of care ONLY, for a different plan. Never reuse its concept, palette, materials or layout) ===\n${exemplar}`, cache_control: { type: "ephemeral" } },
+    {
+      type: "text",
+      text: isBrand
+        ? `=== EXEMPLAR design.py: the client's BRAND STANDARD (Coffee Berry), built for one of their plans. Reuse its finishes, materials, joinery and lighting language exactly; take every position from THIS plan, never from the exemplar ===\n${exemplar}`
+        : `=== EXEMPLAR design.py (API usage and level of care ONLY, for a different plan. Never reuse its concept, palette, materials or layout) ===\n${exemplar}`,
+      cache_control: { type: "ephemeral" },
+    },
   ];
   const content: Anthropic.Beta.BetaContentBlockParam[] = [];
   planImages.forEach((img, i) => {

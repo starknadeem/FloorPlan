@@ -35,6 +35,7 @@ function extractJson(text: string): unknown {
 export async function parsePlanImage(
   imageBase64: string,
   mediaType: "image/jpeg" | "image/png" | "image/webp",
+  tiles: { data: string; label: string }[] = [],
 ): Promise<ParseResult> {
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY from env
 
@@ -48,7 +49,12 @@ export async function parsePlanImage(
       {
         role: "user",
         content: [
+          { type: "text", text: "WHOLE PAGE (overview: use it for the outline, dimensions and coordinates):" },
           { type: "image", source: { type: "base64", media_type: mediaType, data: imageBase64 } },
+          ...tiles.flatMap((t) => [
+            { type: "text" as const, text: t.label + " Read seating symbols, circled numbers and small labels here; express positions in the same metre frame as the overview." },
+            { type: "image" as const, source: { type: "base64" as const, media_type: "image/jpeg" as const, data: t.data } },
+          ]),
           { type: "text", text: buildUserText() },
         ],
       },

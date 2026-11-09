@@ -71,6 +71,14 @@ CATALOG = {
     "rattan": ("hessian", "#c8a978", 1.0), "hessian": ("hessian", None, 1.0), "corduroy": ("corduroy", "#8a6a4a", 1.0), "rug": ("hessian", "#8d6e55", 1.0),
     "boucle": ("boucle_teddy", "#e6dfd0", 1.0), "boucle_sage": ("boucle_teddy", "#9fae95", 1.0), "leather": ("leather_brown", "#6b4a35", 0.7), "felt": ("fabric", "#2a2620", 1.0),
     "brushed_steel": ("brushed_steel", "#c9cbce", 1.0),
+    # Coffee Berry brand finishes (client schedule "CB Leo ΥΛΙΚΑ" + 7. Photo references), see gen_client_textures.py
+    "cb_floor": ("cb_soulant", None, 0.8),            # Soulant gris mat 60x120: shop floor + WC floor/walls
+    "cb_prep_floor": ("cb_ariman", None, 0.9),        # Ariman grey mat R10 30x60: preparation room
+    "cb_bar_tile": ("cb_sassiepietre", None, 0.75),   # COEM Sassiepietre Grigio 90.6: bar
+    "cb_milazza": ("cb_milazza", None, 0.6),          # HPL Millaza matt (outdoor table tops, stand tops)
+    "cb_oak": ("oak_light", "#cfae84", 0.65),         # light sonoma-oak melamine: worktops, cabinets, bean-dispenser panel
+    "cb_marble_black": ("marble", "#26292b", 0.3),    # Nero Marquina-look counter fronts + splashbacks
+    "rockfon": ("plaster", "#f5f4f0", 1.0),           # Rockfon Mono Acoustic seamless white ceiling
 }
 METAL_PBR = {"brushed_steel"}
 
@@ -168,7 +176,7 @@ def lathe_into(bm, profile, center, seg=14):
 # ----------------------------------------------------------------------------------------------
 
 class Kit:
-    def __init__(self, scene, textures_dir=None, seed=None, style=None, collection="Cafe", clear=True):
+    def __init__(self, scene, textures_dir=None, seed=None, style=None, collection="Cafe", clear=True, brand="coffeeberry"):
         """seed: the runner passes a fresh SEED per design, so every run differs even on the same plan
         (without one, the plan geometry is hashed, which repeats). style: design language, selects which
         library variants may appear (industrial, scandinavian, japandi, bistro, mediterranean, deco,
@@ -198,6 +206,7 @@ class Kit:
         self.cameras = []
         # ---- real-asset library (curated GLBs) ----
         self.style = style
+        self.brand = brand   # the client's own models (manifest "brand") always win over generic library variants
         self._here = os.path.dirname(os.path.abspath(__file__))
         self.assets_root = os.path.join(self._here, "assets")
         self.models_dir = os.path.join(self.assets_root, "models")
@@ -534,6 +543,12 @@ class Kit:
         key = (category, style or self.style)
         if key in self._chosen:
             return self._chosen[key]
+        if self.brand:
+            # the client re-uses the same furniture and equipment in every shop: their models are not optional
+            own = [it for it in items if it.get("brand") == self.brand]
+            if own:
+                self._chosen[key] = own[0]
+                return own[0]
         st = style or self.style
         pool = [it for it in items if st in it.get("style_tags", [])] if st else items
         chosen = self.rng.choice(pool or items)
@@ -541,10 +556,11 @@ class Kit:
         return chosen
 
     def place(self, category, at, rot=0.0, style=None, variant=None, fit=None,
-              footprint=None, z=0.0, coll=None, name=None):
+              footprint=None, z=0.0, coll=None, name=None, height=None):
         """Place a curated GLB from the library. Returns the created objects, or None if no asset is
         available for `category` (callers then fall back to their parametric build). fit 'real' keeps
-        the model's true size; 'contain'/'width' scale it to `footprint` (plan w,d)."""
+        the model's true size; 'contain'/'width' scale it to `footprint` (plan w,d); 'stretch' scales x/y to
+        `footprint` exactly and z to `height` (tables: the plan's top size, the brand's model)."""
         import mathutils
         it = self.pick_asset(category, style, variant)
         if not it:
@@ -554,16 +570,20 @@ class Kit:
             return None
         entries, size, mn, center = rec
         fit = fit or it.get("fit", "real")
+        sx = sy = sz = 1.0
         if fit in ("contain", "width") and footprint:
             sW = footprint[0] / size.x if size.x > 1e-3 else 1.0
             sD = footprint[1] / size.y if size.y > 1e-3 else 1.0
-            scale = min(sW, sD) if fit == "contain" else sW
-        else:
-            scale = 1.0
+            sx = sy = sz = min(sW, sD) if fit == "contain" else sW
+        elif fit == "stretch":
+            if footprint:
+                sx = footprint[0] / size.x if size.x > 1e-3 else 1.0
+                sy = footprint[1] / size.y if size.y > 1e-3 else 1.0
+            sz = (height / size.z) if (height and size.z > 1e-3) else 1.0
         rotz = math.radians(rot + it.get("forward_deg", 0))
         M = (mathutils.Matrix.Translation((at[0], at[1], z))
              @ mathutils.Matrix.Rotation(rotz, 4, "Z")
-             @ mathutils.Matrix.Diagonal((scale, scale, scale, 1.0))
+             @ mathutils.Matrix.Diagonal((sx, sy, sz, 1.0))
              @ mathutils.Matrix.Translation((-center.x, -center.y, -mn.z)))
         g = coll or self.coll
         objs = []
@@ -1417,6 +1437,25 @@ class Kit:
         """Styled merchandise along a shelf: coffee bags with labels, glass jars of beans, tins, book stacks."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         g = self._collection("Props")
+        merch = [it for it in self.manifest.get("merch", []) if it.get("brand") == self.brand] if self.brand else []
+        if merch:
+            # the client's real retail range (Coffee Berry bags, tins, capsule boxes, tumblers), facing the room
+            face_rot = math.degrees(math.atan2(nx, -ny))
+            u, k = 0.1, 0
+            while True:
+                it = merch[k % len(merch)]
+                wid = it["footprint"][0]
+                if u + wid > L - 0.08:
+                    break
+                n_ = 2 if wid < 0.12 else 1      # small packs stand in pairs
+                for j in range(n_):
+                    x = a[0] + ux * (u + wid / 2) + nx * (depth * (0.35 + 0.3 * j))
+                    y = a[1] + uy * (u + wid / 2) + ny * (depth * (0.35 + 0.3 * j))
+                    if it["height"] < 0.4:
+                        self.place("merch", (x, y), rot=face_rot + self.rng.uniform(-6, 6), z=z, coll=g, name=f"{name}_{it['variant']}", variant=it["variant"])
+                u += wid + 0.05
+                k += 1
+            return g
         pal = ["#b48a5a", "#2a2420", "#3e5c44", "#efe8dc", "#7a4a2c", "#9b2d20"]
         u = 0.12
         k = 0
@@ -1461,7 +1500,12 @@ class Kit:
         90 faces east (+x), 180 faces north (+y), -90 faces west (-x). Uses a curated real model from
         the asset library when one exists for category 'chair'; otherwise builds the parametric chair."""
         g = self._collection("Seating")
-        if variant is None and (self._room_at(at[0], at[1]) or {}).get("category") == "seating_outdoor":
+        outdoor = self._is_outdoor(at)
+        if variant is None and outdoor and self.manifest.get("chair_outdoor"):
+            # the brand's terrace chair (Balfour, terracotta)
+            if self.place("chair_outdoor", at, rot=rot, coll=g, name=name) is not None:
+                return g
+        if variant is None and outdoor:
             variant = self._outdoor_chair()
         if self.place("chair", at, rot=rot, coll=g, name=name, variant=variant) is not None:
             return g
@@ -1483,18 +1527,26 @@ class Kit:
         """Table with chairs. shape "round" (size = diameter) or "rect" (size=(w, d)). top: any material (marble, terrazzo, walnut, "marble_verde"...).
         base: "pedestal" | "tulip" | "trestle" | "hairpin" | "auto". edge: metal edge band or None. variant: force a chair model."""
         g = self._collection("Seating")
+        if self._brand_table(at, shape, size, h, name):
+            # client's own table model; chairs still go round it exactly as the parametric table seats them
+            base = "__brand__"
         bm_ = self.M("black_steel")
-        if base == "auto":
+        if base == "__brand__":
+            pass
+        elif base == "auto":
             base = "tulip" if shape == "round" and self.style in ("midcentury", "modern", "scandinavian", "deco") else "pedestal" if shape == "round" else "hairpin" if self.style in ("industrial", "midcentury", "brutalist", "retro") else "trestle"
         if shape == "round":
             r = size / 2
-            self.lathe(f"{name}_top", [(0, h - 0.028), (r - 0.012, h - 0.028), (r, h - 0.018), (r, h - 0.006), (r - 0.006, h), (0, h)], (at[0], at[1], 0), self.M(top), 56, g)
-            if edge:
-                self.cyl(f"{name}_edge", r + 0.002, 0.012, (at[0], at[1], h - 0.022), self.M(edge), 56, coll=g)
-            if base == "tulip":
-                self.lathe(f"{name}_base", [(0, 0), (0.24, 0), (0.25, 0.006), (0.2, 0.02), (0.06, 0.06), (0.034, 0.2), (0.034, h - 0.16), (0.075, h - 0.03), (0, h - 0.03)], (at[0], at[1], 0), self.M(self.style_base()), 48, g)
+            if base == "__brand__":
+                pass
             else:
-                self.lathe(f"{name}_base", [(0, 0), (0.25, 0), (0.25, 0.012), (0.16, 0.022), (0.035, 0.05), (0.03, 0.2), (0.03, h - 0.1), (0.05, h - 0.06), (0.1, h - 0.04), (0.1, h - 0.03), (0, h - 0.03)], (at[0], at[1], 0), bm_, 40, g)
+              self.lathe(f"{name}_top", [(0, h - 0.028), (r - 0.012, h - 0.028), (r, h - 0.018), (r, h - 0.006), (r - 0.006, h), (0, h)], (at[0], at[1], 0), self.M(top), 56, g)
+              if edge:
+                  self.cyl(f"{name}_edge", r + 0.002, 0.012, (at[0], at[1], h - 0.022), self.M(edge), 56, coll=g)
+              if base == "tulip":
+                  self.lathe(f"{name}_base", [(0, 0), (0.24, 0), (0.25, 0.006), (0.2, 0.02), (0.06, 0.06), (0.034, 0.2), (0.034, h - 0.16), (0.075, h - 0.03), (0, h - 0.03)], (at[0], at[1], 0), self.M(self.style_base()), 48, g)
+              else:
+                  self.lathe(f"{name}_base", [(0, 0), (0.25, 0), (0.25, 0.012), (0.16, 0.022), (0.035, 0.05), (0.03, 0.2), (0.03, h - 0.1), (0.05, h - 0.06), (0.1, h - 0.04), (0.1, h - 0.03), (0, h - 0.03)], (at[0], at[1], 0), bm_, 40, g)
             cr = chair_r or (r + 0.3)
             for i in range(chairs):
                 a = 2 * math.pi * i / chairs + math.pi / 2
@@ -1502,27 +1554,168 @@ class Kit:
                 self.chair((cx, cy), math.degrees(a) - 90, seat_mat=seat_mat, name=f"{name}_chair{i}", variant=variant)
         else:
             w, d = size if isinstance(size, (tuple, list)) else (size, size * 0.6)
-            self.box(f"{name}_top", (w, d, 0.03), (at[0], at[1], h - 0.015), 0, self.M(top), g, bevel=0.006)
-            if edge:
-                self.box(f"{name}_edge", (w + 0.006, d + 0.006, 0.012), (at[0], at[1], h - 0.022), 0, self.M(edge), g, bevel=0)
-            if base == "trestle":
-                for sx in (-1, 1):
-                    x = at[0] + sx * (w / 2 - 0.14)
-                    self.box(f"{name}_upright", (0.05, 0.05, h - 0.06), (x, at[1], (h - 0.06) / 2 + 0.03), 0, bm_, g)
-                    self.box(f"{name}_foot", (0.05, d - 0.1, 0.03), (x, at[1], 0.015), 0, bm_, g)
-                    self.box(f"{name}_cap", (0.05, d - 0.16, 0.03), (x, at[1], h - 0.045), 0, bm_, g)
-                self.box(f"{name}_rail", (w - 0.32, 0.03, 0.05), (at[0], at[1], h - 0.06), 0, bm_, g)
-            else:
-                for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
-                    x, y = at[0] + sx * (w / 2 - 0.07), at[1] + sy * (d / 2 - 0.07)
-                    self.cyl(f"{name}_leg", 0.008, h - 0.03, (x, y, 0), bm_, 10, coll=g)
-                    self.cyl(f"{name}_leg", 0.008, h - 0.03, (x, y - sy * 0.05, 0), bm_, 10, coll=g)
-            per_side = max(1, chairs // 2)
+            if base != "__brand__":
+              self.box(f"{name}_top", (w, d, 0.03), (at[0], at[1], h - 0.015), 0, self.M(top), g, bevel=0.006)
+              if edge:
+                  self.box(f"{name}_edge", (w + 0.006, d + 0.006, 0.012), (at[0], at[1], h - 0.022), 0, self.M(edge), g, bevel=0)
+              if base == "trestle":
+                  for sx in (-1, 1):
+                      x = at[0] + sx * (w / 2 - 0.14)
+                      self.box(f"{name}_upright", (0.05, 0.05, h - 0.06), (x, at[1], (h - 0.06) / 2 + 0.03), 0, bm_, g)
+                      self.box(f"{name}_foot", (0.05, d - 0.1, 0.03), (x, at[1], 0.015), 0, bm_, g)
+                      self.box(f"{name}_cap", (0.05, d - 0.16, 0.03), (x, at[1], h - 0.045), 0, bm_, g)
+                  self.box(f"{name}_rail", (w - 0.32, 0.03, 0.05), (at[0], at[1], h - 0.06), 0, bm_, g)
+              else:
+                  for sx, sy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+                      x, y = at[0] + sx * (w / 2 - 0.07), at[1] + sy * (d / 2 - 0.07)
+                      self.cyl(f"{name}_leg", 0.008, h - 0.03, (x, y, 0), bm_, 10, coll=g)
+                      self.cyl(f"{name}_leg", 0.008, h - 0.03, (x, y - sy * 0.05, 0), bm_, 10, coll=g)
+            per_side = max(1, chairs // 2) if chairs else 0
             for i in range(per_side):
                 x = at[0] - w / 2 + w * (i + 0.5) / per_side
                 self.chair((x, at[1] - d / 2 - 0.26), 180, seat_mat=seat_mat, name=f"{name}_chair_s{i}", variant=variant)
                 self.chair((x, at[1] + d / 2 + 0.26), 0, seat_mat=seat_mat, name=f"{name}_chair_n{i}", variant=variant)
         return g
+
+    def _is_outdoor(self, at):
+        room = self._room_at(at[0], at[1]) or {}
+        return str(room.get("category", "")).endswith("outdoor") or not (room.get("ceilingHeight") or 0) > 0 and bool(room)
+
+    def _brand_table(self, at, shape, size, h, name, rot=0.0):
+        """Client table model stretched to the plan's top size and height. Round → table_round; tall (h ≥ 0.9) or long
+        (≥ 1.3 m) → table_high (Ferro stand / Daylight frame); small square → table_square (Omicron pedestal, 60×60 top)."""
+        if not self.brand:
+            return False
+        if shape == "round":
+            cat, fp = "table_round", (size, size)
+        else:
+            w, d = size if isinstance(size, (tuple, list)) else (size, size * 0.6)
+            cat = "table_high" if (h >= 0.9 or max(w, d) >= 1.3) else "table_square"
+            fp = (w, d)
+        if not any(it.get("brand") == self.brand for it in self.manifest.get(cat, [])):
+            return False
+        return self.place(cat, at, rot=rot, fit="stretch", footprint=fp, height=h, coll=self._collection("Seating"), name=f"{name}_top") is not None
+
+    def plan_furniture(self, seat_mat="linen:#d8cbb4", bench_mat=None, auto_chairs=True, umbrella_colour="#efe4cf"):
+        """Build ALL loose seating exactly where the floor plan draws it, with the client's own furniture models:
+        every table (size + position from the plan), every chair turned to face its table, every stool, every banquette
+        (backed onto its wall) and terrace stand counters. Nothing is invented or moved. Tables in work rooms are skipped
+        (prep tables are worktops, plan_equipment dresses them). Call after the counters exist and before décor."""
+        fx = self.scene.get("fixtures", [])
+        g = self._collection("Seating")
+        def room_ok(x, y):
+            rc = str((self._room_at(x, y) or {}).get("category", ""))
+            return not any(k in rc for k in ("prep", "kitchen", "storage", "wc", "staff"))
+        def dims(f):
+            w, d = (f.get("footprint") or [0.6, 0.6])[:2]
+            if abs(round((f.get("rotation") or 0) / 90)) % 2 == 1:
+                w, d = d, w
+            return w, d
+        tables, made = [], {"table": 0, "chair": 0, "stool": 0, "banquette": 0, "stand": 0}
+        for f in fx:
+            cat, nm = f.get("category"), (f.get("name") or "").lower()
+            x, y = f["position"][:2]
+            is_stand = cat == "counter" and self._is_outdoor((x, y)) and any(k in nm for k in ("stand", "πάγκος", "bar table"))
+            if not (cat == "table" or is_stand) or not room_ok(x, y):
+                continue
+            w, d = dims(f)
+            tall = is_stand or any(k in nm for k in ("stand", "bar table", "high", "poseur")) or (f.get("height") or 0) >= 0.9
+            h = 1.05 if tall else 0.75
+            name = f"plan_{f.get('id', len(tables))}"
+            if "round" in nm or f.get("shape") == "round":
+                self.table((x, y), shape="round", size=max(w, d), h=h, chairs=0, name=name)
+            else:
+                self.table((x, y), shape="rect", size=(w, d), h=h, chairs=0, name=name)
+            tables.append((x, y, w, d, h))
+            made["stand" if is_stand else "table"] += 1
+            self._occupied.append((x, y, max(w, d) / 2))
+        def nearest_table(x, y, reach=1.4):
+            best, bd = None, reach
+            for t in tables:
+                # distance to the table's rectangle, not its centre (long tables)
+                dx = max(abs(x - t[0]) - t[2] / 2, 0); dy = max(abs(y - t[1]) - t[3] / 2, 0)
+                dd = math.hypot(dx, dy)
+                if dd < bd:
+                    best, bd = t, dd
+            return best
+        def face(x, y, t):
+            # aim at the closest point of the table's top, so chairs along a long table face it squarely
+            px = min(max(x, t[0] - t[2] / 2), t[0] + t[2] / 2); py = min(max(y, t[1] - t[3] / 2), t[1] + t[3] / 2)
+            if abs(px - x) < 1e-3 and abs(py - y) < 1e-3:
+                px, py = t[0], t[1]
+            return math.degrees(math.atan2(px - x, -(py - y)))
+        seats = [f for f in fx if f.get("category") in ("chair", "stool")]
+        for f in seats:
+            x, y = f["position"][:2]
+            if not room_ok(x, y):
+                continue
+            t = nearest_table(x, y)
+            rot = face(x, y, t) if t else (f.get("rotation") or 0)
+            if f["category"] == "stool" or (t and t[4] >= 0.9):
+                self.stool((x, y), name=f"plan_{f.get('id')}", rot=rot)
+                made["stool"] += 1
+            else:
+                self.chair((x, y), rot=rot, seat_mat=seat_mat, name=f"plan_{f.get('id')}")
+                made["chair"] += 1
+        if auto_chairs and not seats:
+            for (x, y, w, d, h) in tables:   # plan without drawn chairs: seat each side that is ≥ 0.55 m
+                for (sx, sy, L) in ((0, -1, w), (0, 1, w), (-1, 0, d), (1, 0, d)):
+                    n = int(L / 0.55)
+                    for i in range(n):
+                        off = -L / 2 + L * (i + 0.5) / n
+                        cx = x + (sx * (w / 2 + 0.3) if sx else off)
+                        cy = y + (sy * (d / 2 + 0.3) if sy else off)
+                        if room_ok(cx, cy) and (sx == 0 or w < 1.0):
+                            rot = math.degrees(math.atan2(x - cx, -(y - cy)))
+                            (self.stool((cx, cy), rot=rot) if h >= 0.9 else self.chair((cx, cy), rot=rot, seat_mat=seat_mat))
+                            made["stool" if h >= 0.9 else "chair"] += 1
+        for f in fx:
+            if f.get("category") not in ("banquette", "bench", "sofa"):
+                continue
+            x, y = f["position"][:2]
+            w, d = dims(f)
+            along_x = w >= d
+            L, D = (w, d) if along_x else (d, w)
+            D = max(0.5, min(D, 0.7))
+            # the wall is on the side whose probe point leaves the room (or is nearest a wall)
+            best = None
+            for s in (1, -1):
+                nx_, ny_ = (0, s) if along_x else (s, 0)
+                inside = self._room_at(x + nx_ * 1.0, y + ny_ * 1.0) is not None
+                behind = self._room_at(x - nx_ * (D / 2 + 0.35), y - ny_ * (D / 2 + 0.35)) is not None
+                score = (inside and not behind, inside)
+                if best is None or score > best[0]:
+                    best = (score, nx_, ny_)
+            _, nx_, ny_ = best
+            bx, by = x - nx_ * D / 2, y - ny_ * D / 2
+            ux, uy = (1, 0) if along_x else (0, 1)
+            # order a→b so the room (n) lies LEFT of travel
+            if (-uy * 1, ux * 1) != (nx_, ny_):
+                ux, uy = -ux, -uy
+            a = (bx - ux * L / 2, by - uy * L / 2); b = (bx + ux * L / 2, by + uy * L / 2)
+            outdoor = self._is_outdoor((x, y))
+            self.banquette(a, b, depth=D, seat_mat=(bench_mat or "cb_oak") if outdoor else seat_mat, panel=None,
+                           back_h=0.45 if outdoor else 1.05, cushions="roll" if outdoor else "channel", name=f"plan_{f.get('id')}")
+            made["banquette"] += 1
+        # terrace umbrellas and edge planters drawn on the plan
+        made["umbrella"] = made["planter"] = 0
+        for f in fx:
+            nm = (f.get("name") or "").lower()
+            x, y = f["position"][:2]
+            w, d = dims(f)
+            if "umbrella" in nm or "ομπρέλ" in nm:
+                self.umbrella((x, y), size=max(2.5, min(4.0, max(w, d))) if max(w, d) > 1.0 else 3.2, h=2.55, colour=umbrella_colour, name=f"plan_{f.get('id')}")
+                made["umbrella"] += 1
+            elif f.get("category") == "plant" and ("planter" in nm or "ζαρντιν" in nm):
+                along_x = w >= d
+                L = max(w, d)
+                a = (x - L / 2, y) if along_x else (x, y - L / 2)
+                b = (x + L / 2, y) if along_x else (x, y + L / 2)
+                self.planter_hedge(a, b, w=max(0.3, min(w, d)), h=0.5, hedge_h=0.35, planter="concrete", name=f"plan_{f.get('id')}")
+                made["planter"] += 1
+        print(f"PLAN_FURNITURE {made}", flush=True)
+        self._furniture_done = True
+        return made
 
     def style_base(self):
         return {"deco": "brass", "midcentury": "white", "modern": "white", "scandinavian": "white"}.get(self.style, "black_steel")
@@ -1556,9 +1749,10 @@ class Kit:
             self.place("lounge", (cx, cy), rot=math.degrees(a) - 90, coll=g, name=f"{name}_chair{i}", variant=variant)
         return g
 
-    def stool(self, at, h=0.75, name="stool", variant=None):
+    def stool(self, at, h=0.75, name="stool", variant=None, rot=None):
         g = self._collection("Seating")
-        if self.place("stool", at, rot=self.rng.uniform(-8, 8), coll=g, name=name, variant=variant) is not None:
+        rot = self.rng.uniform(-8, 8) if rot is None else rot
+        if self.place("stool", at, rot=rot, coll=g, name=name, variant=variant) is not None:
             return g
         self.cyl(f"{name}_seat", 0.17, 0.05, (at[0], at[1], h - 0.05), self.M("leather"), 20, coll=g)
         self.cyl(f"{name}_stem", 0.025, h - 0.07, (at[0], at[1], 0.02), self.M("black"), 12, coll=g)
