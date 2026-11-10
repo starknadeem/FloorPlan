@@ -1658,9 +1658,9 @@ class Kit:
             h = 1.05 if tall else 0.75
             name = f"plan_{f.get('id', len(tables))}"
             if self.brand and self._is_outdoor((x, y)) and "stand" in nm and abs(w - d) < 0.2 and min(w, d) >= 0.9:
-                # CB spec 4.11: the square terrace stand is a 0.86 m planter wall with a leaning ledge round an olive tree
-                self.olive_stand((x, y), size=max(w, d), h=0.86, name=name)
-                tables.append((x, y, w, d, 0.86))
+                # CB spec 4.11 / drawing A21: 1.2 m square HPL table top at 0.90 m round an olive tree, on a 0.8 m planter wall
+                self.olive_stand((x, y), size=max(w, d), h=0.90, name=name)
+                tables.append((x, y, w, d, 0.90))
                 made["stand"] += 1
                 continue
             if "round" in nm or f.get("shape") == "round":
@@ -1693,7 +1693,8 @@ class Kit:
             t = nearest_table(x, y)
             rot = face(x, y, t) if t else (f.get("rotation") or 0)
             if f["category"] == "stool" or (t and t[4] >= 0.9):
-                self.stool((x, y), name=f"plan_{f.get('id')}", rot=rot)
+                # counter-height top (olive stand, 0.90 m) takes a counter stool, seat ~0.65 m; bar tables (1.05 m) the bar stool
+                self.stool((x, y), name=f"plan_{f.get('id')}", rot=rot, seat=0.65 if (t and t[4] < 1.0) else None)
                 made["stool"] += 1
             else:
                 self.chair((x, y), rot=rot, seat_mat=seat_mat, name=f"plan_{f.get('id')}")
@@ -1708,7 +1709,7 @@ class Kit:
                         cy = y + (sy * (d / 2 + 0.3) if sy else off)
                         if room_ok(cx, cy) and (sx == 0 or w < 1.0):
                             rot = math.degrees(math.atan2(x - cx, -(y - cy)))
-                            (self.stool((cx, cy), rot=rot) if h >= 0.9 else self.chair((cx, cy), rot=rot, seat_mat=seat_mat))
+                            (self.stool((cx, cy), rot=rot, seat=0.65 if h < 1.0 else None) if h >= 0.9 else self.chair((cx, cy), rot=rot, seat_mat=seat_mat))
                             made["stool" if h >= 0.9 else "chair"] += 1
         for f in fx:
             if f.get("category") not in ("banquette", "bench", "sofa"):
@@ -1718,6 +1719,22 @@ class Kit:
             along_x = w >= d
             L, D = (w, d) if along_x else (d, w)
             D = max(0.5, min(D, 0.7))
+            # The parser is inconsistent about whether a ±90° bench's footprint is already in world axes, so the
+            # rotation alone can turn a wall bench 90° out into the room. A banquette backs onto a wall: run it
+            # parallel to the wall it is drawn against (the nearest one), falling back to the footprint if free-standing.
+            def gap(nx_, ny_):
+                for k in range(1, 41):
+                    t_ = k * 0.05
+                    if self._room_at(x + nx_ * t_, y + ny_ * t_) is None:
+                        return t_
+                return 9.0
+            gx = min(gap(0, 1), gap(0, -1))     # wall above/below → bench runs along X
+            gy = min(gap(1, 0), gap(-1, 0))     # wall left/right  → bench runs along Y
+            if min(gx, gy) <= D / 2 + 0.45 and abs(gx - gy) > 0.15:
+                want_x = gx < gy
+                if want_x != along_x:
+                    print(f"PLAN_FURNITURE banquette {f.get('id')}: turned to run along its wall ({'X' if want_x else 'Y'})", flush=True)
+                along_x = want_x
             # the wall is on the side whose probe point leaves the room (or is nearest a wall)
             best = None
             for s in (1, -1):
@@ -1793,14 +1810,26 @@ class Kit:
             self.place("lounge", (cx, cy), rot=math.degrees(a) - 90, coll=g, name=f"{name}_chair{i}", variant=variant)
         return g
 
-    def stool(self, at, h=0.75, name="stool", variant=None, rot=None):
+    BAR_SEAT = 0.76     # seat height of the library bar stools (Balfour / Pasadena)
+
+    def stool(self, at, h=0.75, name="stool", variant=None, rot=None, seat=None):
+        """seat: target seat height (e.g. 0.65 for a 0.90 m counter); the bar-stool model is lowered to it (legs shortened,
+        feet stay on the floor)."""
         g = self._collection("Seating")
         rot = self.rng.uniform(-8, 8) if rot is None else rot
+        def lowered(objs):
+            if objs and seat and abs(seat - self.BAR_SEAT) > 0.03:
+                import mathutils
+                k = seat / self.BAR_SEAT
+                S = mathutils.Matrix.Diagonal((1.0, 1.0, k, 1.0))
+                for o in objs:
+                    o.matrix_world = S @ o.matrix_world
+            return objs
         if variant is None and self._is_outdoor(at) and self.manifest.get("stool_outdoor"):
             # the brand's terrace stool (Balfour bar stool, terracotta), never the upholstered indoor Pasadena
-            if self.place("stool_outdoor", at, rot=rot, coll=g, name=name) is not None:
+            if lowered(self.place("stool_outdoor", at, rot=rot, coll=g, name=name)) is not None:
                 return g
-        if self.place("stool", at, rot=rot, coll=g, name=name, variant=variant) is not None:
+        if lowered(self.place("stool", at, rot=rot, coll=g, name=name, variant=variant)) is not None:
             return g
         self.cyl(f"{name}_seat", 0.17, 0.05, (at[0], at[1], h - 0.05), self.M("leather"), 20, coll=g)
         self.cyl(f"{name}_stem", 0.025, h - 0.07, (at[0], at[1], 0.02), self.M("black"), 12, coll=g)
@@ -2333,16 +2362,18 @@ class Kit:
             nd = (cur * (1.0 if level == 0 else 0.7) + Vector((math.cos(a) * spread, math.sin(a) * spread, rng.uniform(-0.12, 0.22) - 0.06 * level))).normalized()
             self._grow(bark, twigs, leaf_bms, pts[ti], nd, length * rng.uniform(0.72, 0.88), r * 0.62, level + 1, max_level, leaf_len)
 
-    def olive_tree(self, at, h=2.6, name="olive", pot="pot"):
-        """Olive tree in a big planter: gnarled trunk splitting into limbs and twigs, thousands of narrow silver-green leaves."""
+    def olive_tree(self, at, h=2.6, name="olive", pot="pot", base_z=None):
+        """Olive tree in a big planter: gnarled trunk splitting into limbs and twigs, thousands of narrow silver-green leaves.
+        pot=None: planted in a built planter (no pot), trunk rising from soil level base_z."""
         g = self._collection("Props")
-        self.lathe(f"{name}_pot", [(0, 0), (0.27, 0), (0.36, 0.5), (0.385, 0.53), (0.385, 0.56), (0.335, 0.56), (0.32, 0.5), (0, 0.5)], (at[0], at[1], 0), self.M(pot), 36, g)
-        self.cyl(f"{name}_soil", 0.33, 0.012, (at[0], at[1], 0.5), self.M("soil"), 28, coll=g)
+        if pot:
+            self.lathe(f"{name}_pot", [(0, 0), (0.27, 0), (0.36, 0.5), (0.385, 0.53), (0.385, 0.56), (0.335, 0.56), (0.32, 0.5), (0, 0.5)], (at[0], at[1], 0), self.M(pot), 36, g)
+            self.cyl(f"{name}_soil", 0.33, 0.012, (at[0], at[1], 0.5), self.M("soil"), 28, coll=g)
         bark, twigs = bmesh.new(), bmesh.new()
         leaves = [bmesh.new() for _ in range(3)]
         crown = max(1.2, h - 0.5)
         self._canopies.append((at[0], at[1], crown * 1.0))
-        self._grow(bark, twigs, leaves, (at[0], at[1], 0.49), (0.05, 0.03, 1.0), crown * 0.36, 0.058, 0, 4, 0.058)
+        self._grow(bark, twigs, leaves, (at[0], at[1], 0.49 if base_z is None else base_z), (0.05, 0.03, 1.0), crown * 0.36, 0.058, 0, 4, 0.058)
         self._commit_bm(bark, f"{name}_bark", "bark", g, smooth=60.0)
         self._commit_bm(twigs, f"{name}_twig", "bark", g, smooth=60.0)
         for i, (bm, mt) in enumerate(zip(leaves, ("leaf_olive", "leaf_olive2", "leaf_olive3"))):
@@ -2559,19 +2590,32 @@ class Kit:
         g.objects.link(o)
         return g
 
-    def olive_stand(self, at, size=1.2, h=0.86, ledge=0.3, top="cb_milazza", wall="concrete", tree_h=2.6, spot=True, name="olive_stand"):
-        """Terrace stand counter (CB spec 4.11): a square perimeter wall `size` × `size`, `h` high, capped by a `ledge`-wide
-        leaning top (HPL like the tables, or fir) round a planter with an olive tree, uplit by a spike spot."""
+    def olive_stand(self, at, size=1.2, h=0.90, hole=0.6, wall_out=0.8, wall_t=0.1, top="cb_milazza", wall="#6c6960", top_t=0.04, tree_h=2.6, spot=True, led=True, name="olive_stand"):
+        """Terrace stand counter, CB drawing A21 / spec 4.11: a `size` × `size` HPL table top (`top_t` thick, top at `h` = 0.90 m)
+        with a `hole` × `hole` cut-out the olive tree grows through, cantilevered 20 cm all round over a `wall_out` square support
+        wall (`wall_t` thick, RAL 7039) that is the planter. LED strip under the top's edge; spike spot uplighting the tree."""
         g = self._collection("Props")
         x, y = at
-        t = ledge
-        for (dx, dy, w_, d_) in ((0, (size - t) / 2, size, t), (0, -(size - t) / 2, size, t), ((size - t) / 2, 0, t, size - 2 * t), (-(size - t) / 2, 0, t, size - 2 * t)):
-            self.box(f"{name}_wall", (w_ - 0.02, d_ - 0.02, h - 0.03), (x + dx, y + dy, (h - 0.03) / 2), 0, self.M(wall), g, bevel=0.006)
-            self.box(f"{name}_top", (w_ + 0.02 if w_ == size else w_, d_ + 0.02 if d_ == size else d_ + 0.02, 0.03), (x + dx, y + dy, h - 0.015), 0, self.M(top), g, bevel=0.004)
-        self.box(f"{name}_soil", (size - 2 * t, size - 2 * t, 0.02), (x, y, h - 0.1), 0, self.M("soil"), g, bevel=0)
-        self.olive_tree((x, y), h=tree_h, name=f"{name}_olive", pot=wall)
+        hw = (size - hole) / 2                      # width of each top strip (0.30 m)
+        z = h - top_t / 2
+        for (dx, dy, w_, d_) in ((0, (size - hw) / 2, size, hw), (0, -(size - hw) / 2, size, hw),
+                                 ((size - hw) / 2, 0, hw, hole), (-(size - hw) / 2, 0, hw, hole)):
+            self.box(f"{name}_top", (w_, d_, top_t), (x + dx, y + dy, z), 0, self.M(top), g, bevel=0.004)
+        wh = h - top_t
+        o = (wall_out - wall_t) / 2
+        for (dx, dy, w_, d_) in ((0, o, wall_out, wall_t), (0, -o, wall_out, wall_t), (o, 0, wall_t, wall_out - 2 * wall_t), (-o, 0, wall_t, wall_out - 2 * wall_t)):
+            self.box(f"{name}_wall", (w_, d_, wh), (x + dx, y + dy, wh / 2), 0, self.M(wall), g, bevel=0.004)
+        self.box(f"{name}_soil", (wall_out - 2 * wall_t, wall_out - 2 * wall_t, 0.02), (x, y, wh - 0.12), 0, self.M("soil"), g, bevel=0)
+        self.olive_tree((x, y), h=tree_h, name=f"{name}_olive", pot=None, base_z=wh - 0.11)
+        if led:                                     # "ταινία led" under the overhang, washing the support wall
+            e = size / 2 - 0.03
+            for (a_, b_) in (((x - e, y - e), (x + e, y - e)), ((x + e, y - e), (x + e, y + e)), ((x + e, y + e), (x - e, y + e)), ((x - e, y + e), (x - e, y - e))):
+                mx, my = (a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2
+                L = math.hypot(b_[0] - a_[0], b_[1] - a_[1])
+                self.box(f"{name}_led", (L if a_[1] == b_[1] else 0.012, 0.012 if a_[1] == b_[1] else L, 0.006), (mx, my, h - top_t - 0.004), 0, self.M("led"), g, bevel=0)
+                self.strip_light(a_, b_, h - top_t - 0.01, (0, 0, -1), 6.0, kelvin=2900, width=0.02, name=f"{name}_led")
         if spot:
-            self.spike_spot((x + (size / 2 - t) * 0.6, y, h - 0.09), aim=(-0.25, 0, 1.0), name=f"{name}_spot")
+            self.spike_spot((x + hole / 2 - 0.08, y, wh - 0.1), aim=(-0.25, 0, 1.0), name=f"{name}_spot")
         self._occupied.append((x, y, size / 2))
         return g
 
@@ -2957,16 +3001,30 @@ class Kit:
                 best, bt, bd = R, t, d
         return best, bt
 
-    def plan_equipment(self, skip=(), dress=True, wc_finish=None, wc_dado=None, vanity="auto", kitchen_finish=None):
+    def plan_equipment(self, skip=(), dress=True, wc_finish=None, wc_dado=None, vanity="auto", kitchen_finish=None, plan_only=None):
         """Put every appliance from the plan's legend into the building with detailed models, then dress the washrooms and kitchens
         (vanity, backlit mirror, grab rails, accessories; steel worktops, shelves, hood, task light, cookware). Items that stand on the floor
         go back-to-wall facing the room, wherever the plan put them. Items inside a counter sit on it or become under-counter units. Never
-        floats anything. Call AFTER counter_run/back_bar/espresso_station. Optional style: wc_finish, wc_dado, vanity, kitchen_finish (materials)."""
+        floats anything. Call AFTER counter_run/back_bar/espresso_station. Optional style: wc_finish, wc_dado, vanity, kitchen_finish (materials).
+        plan_only (default: auto): a work room (prep/kitchen/WC/storage) whose plan draws ≥2 fixtures is built EXACTLY as drawn: the plan's
+        benches at their drawn size, appliances at their drawn width, an electric oven on its stand (no gas range, no hood), the WC's
+        wall-hung basin where drawn; nothing invented (no extra worktops, cookware, rail, drain, vanity, or auto-furnished microwave/toaster)."""
         self._plan_done = True
         placed, skipped = [], []
         toilets, basins, stoves = {}, {}, []
         jobs = []
-        for f in self.scene.get("fixtures", []):
+        fixtures = self.scene.get("fixtures", [])
+        WORK = ("preparation", "kitchen", "storage", "wc", "staff")
+        drawn = {}
+        for f in fixtures:
+            r_ = self._room_at(*f["position"][:2])
+            if r_ and f.get("placedBy") != "design":
+                drawn[r_.get("id")] = drawn.get(r_.get("id"), 0) + 1
+        self._plan_rooms = {r_["id"] for r_ in self.scene.get("rooms", []) if plan_only is not False
+                            and any(k in str(r_.get("category", "")) for k in WORK) and drawn.get(r_["id"], 0) >= 2}
+        if self._plan_rooms:
+            self._plan_benches(fixtures)
+        for f in fixtures:
             cat = f.get("category")
             nm = (f.get("name") or f.get("label") or "").lower()
             if cat in skip or any(k in nm for k in skip):
@@ -2975,8 +3033,15 @@ class Kit:
             fw, fd = (f.get("footprint") or [0.5, 0.5])[:2]
             room = self._room_at(x, y) or {}
             rcat = str(room.get("category", ""))
+            in_plan = room.get("id") in self._plan_rooms
+            if in_plan and f.get("placedBy") == "design":
+                continue        # auto-furnished extras (microwave, toaster, 2nd toilet, mirror, bin): not on the plan
             lib, mode = None, "floor"
-            if "toilet" in nm or cat == "toilet":
+            if in_plan and cat == "oven" and not any(k in nm for k in ("stove", "range", "hob", "cook", "gas", "combi")):
+                lib, mode = "oven_counter", "top"       # electric oven: sits on the steel stand _plan_benches built at its spot
+            elif in_plan and cat == "fridge" and max(fw, fd) > 1.0:
+                lib = "undercounter"                    # refrigerated bench: it IS the worktop the plan draws
+            elif "toilet" in nm or cat == "toilet":
                 lib = "toilet"
             elif cat == "sink" and ("basin" in nm or "hand wash" in nm or rcat.startswith("wc")):
                 lib = "basin"
@@ -3013,10 +3078,10 @@ class Kit:
             elif cat == "grinder" and not getattr(self, "_has_grinders", False):
                 lib, mode = "grinder", "top"
             if lib and lib not in skip and self.pick_asset(lib):
-                jobs.append((lib, mode, x, y, room, rcat))
+                jobs.append((lib, mode, x, y, room, rcat, self._variant_by_width(lib, max(fw, fd)) if in_plan else None))
         # 1. floor-standing items take their wall spots first
         hoods = []
-        for lib, mode, x, y, room, rcat in jobs:
+        for lib, mode, x, y, room, rcat, var in jobs:
             if mode == "top":
                 continue
             rid = room.get("id")
@@ -3050,7 +3115,7 @@ class Kit:
                 self.place(lib, (R["a"][0] + R["u"][0] * tt + R["n"][0] * (edge + sd * (D / 2 - 0.012)), R["a"][1] + R["u"][1] * tt + R["n"][1] * (edge + sd * (D / 2 - 0.012))), rot=math.degrees(math.atan2(fx, -fy)), coll=self._collection("Equipment"), name=f"{lib}_{len(placed)}")
                 placed.append(lib)
                 continue
-            hit = self._place_on_wall(lib, x, y, f"{lib}_{len(placed)}")
+            hit = self._place_on_wall(lib, x, y, f"{lib}_{len(placed)}", variant=var)
             if hit:
                 placed.append(lib)
                 if lib in ("stove", "oven"):
@@ -3064,11 +3129,13 @@ class Kit:
                 if not (room.get("ceilingHeight") or 0) > 0:
                     continue
                 if cat in ("preparation", "kitchen"):
-                    self.dress_kitchen(room, finish=kitchen_finish, hoods=[h for h in hoods if h[0]["room"] == room["id"]])
+                    self.dress_kitchen(room, finish=kitchen_finish, hoods=[h for h in hoods if h[0]["room"] == room["id"]], plan_only=room["id"] in self._plan_rooms)
+                elif cat == "storage" and room["id"] in self._plan_rooms:
+                    self._batten(room, self._collection("Kitchen"), 45.0)
                 elif cat == "storage":
                     self.dress_storage(room)
         # 3. things that sit on counters
-        for lib, mode, x, y, room, rcat in jobs:
+        for lib, mode, x, y, room, rcat, var in jobs:
             if mode != "top":
                 continue
             it = self.pick_asset(lib)
@@ -3092,10 +3159,89 @@ class Kit:
         if dress:
             for room in self.scene.get("rooms", []):
                 if str(room.get("category", "")).startswith("wc") and (room.get("ceilingHeight") or 0) > 0:
-                    self.dress_washroom(room, basins.get(room["id"], []), has_toilet=toilets.get(room["id"], 0) > 0, finish=wc_finish, dado=wc_dado, vanity=vanity)
+                    self.dress_washroom(room, basins.get(room["id"], []), has_toilet=toilets.get(room["id"], 0) > 0, finish=wc_finish, dado=wc_dado, vanity=vanity,
+                                        plan_only=room["id"] in self._plan_rooms)
         report = {"placed": placed, "skipped": skipped}
         print(f"PLAN_EQUIPMENT placed={len(placed)} {sorted(set(placed))} skipped={skipped}", flush=True)
         return report
+
+    def _variant_by_width(self, lib, w):
+        """The library variant whose width is closest to what the plan draws (2-door vs 1-door fridge, chest vs upright…)."""
+        items = self.manifest.get(lib) or []
+        if len(items) < 2 or not w:
+            return None
+        return min(items, key=lambda it: abs((it.get("footprint") or [w])[0] - w)).get("variant")
+
+    @staticmethod
+    def _rect_of(f):
+        w, d = (f.get("footprint") or [0.6, 0.6])[:2]
+        if abs(round((f.get("rotation") or 0) / 90)) % 2 == 1:
+            w, d = d, w
+        x, y = f["position"][:2]
+        return [x - w / 2, y - d / 2, x + w / 2, y + d / 2]
+
+    def _plan_benches(self, fixtures):
+        """Steel benches exactly where a plan-equipped work room draws them: every counter/table (the prep table, with the
+        dishwasher drawn under it), and a stand under each electric oven. A counter that swallows a refrigerated bench is a
+        dimension line misread as furniture (the bench is the worktop), so it is dropped."""
+        def ov(a, b):
+            return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+        def area(a):
+            return (a[2] - a[0]) * (a[3] - a[1])
+        def near(a, b, gap=0.12):
+            return a[0] - gap < b[2] and b[0] - gap < a[2] and a[1] - gap < b[3] and b[1] - gap < a[3]
+        by_room = {}
+        for f in fixtures:
+            r_ = self._room_at(*f["position"][:2])
+            if r_ and r_["id"] in self._plan_rooms and f.get("placedBy") != "design" and "wc" not in str(r_.get("category")):
+                by_room.setdefault(r_["id"], []).append(f)
+        g = self._collection("Kitchen")
+        for rid, fs in by_room.items():
+            fridge_benches = [self._rect_of(f) for f in fs if f.get("category") == "fridge" and max((f.get("footprint") or [0, 0])[:2]) > 1.0]
+            unders = [self._rect_of(f) for f in fs if f.get("category") == "dishwasher"]
+            rects = []
+            for f in fs:
+                cat, nm = f.get("category"), (f.get("name") or "").lower()
+                r = self._rect_of(f)
+                if cat in ("counter", "table"):
+                    if any(ov(r, b) >= 0.8 * area(b) and area(r) > 1.4 * area(b) for b in fridge_benches):
+                        print(f"PLAN_BENCH drop {f.get('id')} '{f.get('name')}': covers the refrigerated bench (dimension misread)", flush=True)
+                        continue
+                    if any(ov(r, b) >= 0.5 * area(r) for b in fridge_benches):
+                        continue            # the bench itself
+                    for u in unders:
+                        if near(r, u):
+                            r = [min(r[0], u[0]), min(r[1], u[1]), max(r[2], u[2]), max(r[3], u[3])]
+                    rects.append(r)
+                elif cat == "oven" and not any(k in nm for k in ("stove", "range", "hob", "cook", "gas", "combi")):
+                    rects.append(r)         # stand for the electric oven
+                elif cat == "sink" and not any(k in nm for k in ("basin", "hand wash")):
+                    rects.append(r)         # sink bench at its drawn size (the bowl is inset into it), not a wider library unit
+            for i, r in enumerate(rects):
+                hit = self._bench_face(rid, r)
+                if not hit:
+                    print(f"PLAN_BENCH no wall for {[round(v, 2) for v in r]} in {rid}", flush=True)
+                    continue
+                f_, s0, s1, D = hit
+                self._worktop(f_, s0, s1, g, rid, f"p{i}", D=D, bare=True)
+
+    def _bench_face(self, rid, r):
+        """The wall face a plan rectangle backs onto: (face, s0, s1, depth to the wall), or None for an island."""
+        best = None
+        for f in self._room_faces(rid):
+            ux, uy = (f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]
+            nx, ny = -uy, ux
+            pts = [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]
+            ss = [(p[0] - f["a"][0]) * ux + (p[1] - f["a"][1]) * uy for p in pts]
+            oo = [(p[0] - f["a"][0]) * nx + (p[1] - f["a"][1]) * ny for p in pts]
+            if min(oo) < -0.08 or min(oo) > 0.35 or max(ss) < 0.1 or min(ss) > f["len"] - 0.1:
+                continue
+            along, across = max(ss) - min(ss), max(oo)
+            if along + 0.05 < (max(oo) - min(oo)) and along < 0.55:
+                continue                    # rectangle runs away from this wall
+            if best is None or min(oo) < best[0]:
+                best = (min(oo), f, max(0.03, min(ss)), min(f["len"] - 0.03, max(ss)), max(0.5, min(across, 0.8)))
+        return best[1:] if best else None
 
     def _room_area(self, room):
         p_ = room["polygon"]
@@ -3105,8 +3251,9 @@ class Kit:
     def _style_pick(self, table, default):
         return table.get(self.style, default)
 
-    def dress_washroom(self, room, basin_points=(), has_toilet=True, finish=None, dado=None, vanity="auto"):
-        """A finished washroom: tiled walls, vanity with vessel basin and wall tap, backlit mirror, towel and paper, soap, plant, and grab rails in accessible rooms."""
+    def dress_washroom(self, room, basin_points=(), has_toilet=True, finish=None, dado=None, vanity="auto", plan_only=False):
+        """A finished washroom: tiled walls, vanity with vessel basin and wall tap, backlit mirror, towel and paper, soap, plant, and grab rails in accessible rooms.
+        plan_only: the plan draws the basin, so it goes in as drawn (a wall-hung basin with a mirror above, no vanity cabinet or styling)."""
         rid = room["id"]
         ch = room.get("ceilingHeight") or 2.5
         g = self._collection("Washroom")
@@ -3125,6 +3272,14 @@ class Kit:
         if not has_toilet:
             cx, cy = _centroid(room["polygon"])
             self._place_on_wall("toilet", cx, cy, f"toilet_{rid}")
+        if plan_only and basin_points:
+            for k, (bx, by) in enumerate(basin_points):
+                hit = self._against_wall(bx, by, 0.55, 0.45, 0.9, reach=1.5)
+                if hit:
+                    f, s_ = hit
+                    self._mark_face(f, s_ - 0.3, s_ + 0.3)
+                    self._wallhung_basin(f, s_, metal, g, f"{rid}_b{k}", accessible="disabled" in str(room.get("category")))
+            basin_points = ()
         # vanity: wall nearest the plan's basin, else the longest free wall
         bx, by = (basin_points[0] if basin_points else _centroid(room["polygon"]))
         W = min(1.1, max(0.6, min(max(p[0] for p in room["polygon"]) - min(p[0] for p in room["polygon"]), max(p[1] for p in room["polygon"]) - min(p[1] for p in room["polygon"])) * 0.5))
@@ -3133,7 +3288,7 @@ class Kit:
         if not hit:     # narrow room: a compact hand basin in the wall's free stretch
             W, D_ = 0.5, 0.26
             hit = self._against_wall(bx, by, W, D_, 0.9, reach=9.0, clear=0.4)
-        if hit:
+        if hit and not plan_only:
             f, s_ = hit
             self._mark_face(f, s_ - W / 2, s_ + W / 2)
             self._vanity(f, s_, W, top_mat.get(self.style, "marble_white"), body_mat.get(self.style, "oak") if vanity == "auto" else vanity, metal, g, rid, D=D_)
@@ -3183,6 +3338,28 @@ class Kit:
 
     def _face_dot(self, f, h):
         return ((f["b"][0] - f["a"][0]) * (h["b"][0] - h["a"][0]) + (f["b"][1] - f["a"][1]) * (h["b"][1] - h["a"][1])) / (f["len"] * h["len"])
+
+    def _wallhung_basin(self, f, s_, metal, g, name, accessible=False):
+        """Wall-hung ceramic basin as the plan draws it (accessible: rim 0.80 m, knee space under, lever tap), rectangular mirror above."""
+        ang = math.degrees(math.atan2(f["b"][1] - f["a"][1], f["b"][0] - f["a"][0]))
+        W, D, rim = 0.55, 0.45, (0.80 if accessible else 0.85)
+        Pc = self._F(f, s_, D / 2)
+        self.box(f"{name}_basin", (W, D, 0.15), (Pc[0], Pc[1], rim - 0.075), ang, self.M("cup"), g, bevel=0.03)
+        bw = self._F(f, s_, D * 0.55)
+        self.cyl(f"{name}_bowl", 0.17, 0.006, (bw[0], bw[1], rim - 0.002), self.M("white"), 32, coll=g)
+        self.cyl(f"{name}_drain", 0.022, 0.004, (bw[0], bw[1], rim + 0.004), self.M("chrome"), 16, coll=g)
+        self.rod(f"{name}_trap", self._F(f, s_, D * 0.55, rim - 0.15), self._F(f, s_, 0.0, rim - 0.3), 0.02, self.M("chrome"), 12, g)
+        self.rod(f"{name}_tap", self._F(f, s_, 0.08, rim), self._F(f, s_, 0.08, rim + 0.17), 0.013, self.M(metal), 12, g)
+        self.rod(f"{name}_spout", self._F(f, s_, 0.08, rim + 0.16), self._F(f, s_, 0.2, rim + 0.15), 0.01, self.M(metal), 10, g)
+        self.rod(f"{name}_lever", self._F(f, s_, 0.08, rim + 0.13), self._F(f, s_ + (0.14 if accessible else 0.07), 0.08, rim + 0.13), 0.006, self.M(metal), 8, g)
+        mz0 = rim + 0.2
+        mp = self._F(f, s_, 0.012, mz0 + 0.4)
+        self.box(f"{name}_mirror", (W, 0.012, 0.8), (mp[0], mp[1], mp[2]), ang, self.M("mirror"), g, bevel=0.002)
+        d = bpy.data.lights.new(f"fill_{name}_mirror", "POINT")
+        d.energy = 10.0; d.color = kelvin_to_rgb(3200); d.shadow_soft_size = 0.2
+        o = bpy.data.objects.new(f"fill_{name}_mirror", d)
+        o.location = self._F(f, s_, 0.25, mz0 + 0.95)
+        self._collection("Lighting").objects.link(o)
 
     def _vanity(self, f, s_, W, top, body, metal, g, rid, D=0.48):
         ang = math.degrees(math.atan2(f["b"][1] - f["a"][1], f["b"][0] - f["a"][0]))
@@ -3234,8 +3411,9 @@ class Kit:
         self._leaf_cloud(f"{rid}_sprig", (pv[0], pv[1], 1.1), (0.09, 0.09, 0.11), 70, 0.05, coll=g)
 
     # ---------------- kitchen ----------------
-    def dress_kitchen(self, room, finish=None, hoods=()):
-        """A working kitchen: washable walls, stainless worktops along every free wall, shelving with cookware and task light, hood over the stove, utensil rail, battens."""
+    def dress_kitchen(self, room, finish=None, hoods=(), plan_only=False):
+        """A working kitchen: washable walls, stainless worktops along every free wall, shelving with cookware and task light, hood over the stove, utensil rail, battens.
+        plan_only: the plan already equips this room, so only finish the walls and light it (no invented worktops, rail, cookware or drain)."""
         rid = room["id"]
         ch = room.get("ceilingHeight") or 2.8
         g = self._collection("Kitchen")
@@ -3248,6 +3426,9 @@ class Kit:
             self.place("hood", (hp[0], hp[1]), rot=self._face_rot(f), z=hit_z, coll=g, name=f"{rid}_hood")
             lc = self._F(f, s_, 0.44, hit_z - 0.02)
             self.strip_light(self._F(f, s_ - 0.4, 0.44)[:2], self._F(f, s_ + 0.4, 0.44)[:2], hit_z - 0.02, (0, 0, -1), 22.0, kelvin=3800, width=0.1, name=f"{rid}_hood")
+        if plan_only:
+            self._batten(room, g, 75.0)
+            return g
         tops = []
         for f in sorted(self._room_faces(rid), key=lambda x: -x["len"]):
             blocked = sorted(self._face_blocked(f, 0.92, depth=0.66))
@@ -3286,10 +3467,11 @@ class Kit:
         o.location = (cx, cy, ch - 0.065); o.rotation_euler = (0, 0, math.radians(ang))
         self._collection("Lighting").objects.link(o)
 
-    def _worktop(self, f, s0, s1, g, rid, idx):
-        """Stainless bench on a wall face: upstand, legs, undershelf with stock, wall shelf with cookware and task light; registered as a real counter."""
+    def _worktop(self, f, s0, s1, g, rid, idx, D=0.62, bare=False):
+        """Stainless bench on a wall face: upstand, legs, undershelf with stock, wall shelf with cookware and task light; registered as a real counter.
+        bare: only the bench the plan draws (top, upstand, legs, undershelf), no invented stock, props, wall shelf or cookware."""
         name = f"{rid}_top{idx}"
-        L, D, H = s1 - s0, 0.62, 0.9
+        L, H = s1 - s0, 0.9
         c = (s0 + s1) / 2
         ang = math.degrees(math.atan2(f["b"][1] - f["a"][1], f["b"][0] - f["a"][0]))
         steel = self.M("brushed_steel")
@@ -3306,11 +3488,12 @@ class Kit:
                 p_ = self._F(f, s_, off)
                 self.box(f"{name}_leg", (0.04, 0.04, H - 0.05), (p_[0], p_[1], (H - 0.05) / 2), ang, steel, g, bevel=0.003)
         sh = self._F(f, c, D / 2)
-        self.box(f"{name}_under", (L - 0.04, D - 0.1, 0.02), (sh[0], sh[1], 0.25), ang, steel, g, bevel=0.002)
+        if not bare:    # a plan bench usually houses an under-counter appliance (fridge bench, dishwasher)
+            self.box(f"{name}_under", (L - 0.04, D - 0.1, 0.02), (sh[0], sh[1], 0.25), ang, steel, g, bevel=0.002)
         # stock under the bench: lidded containers, crates, sacks
         u = s0 + 0.2
         k = 0
-        while u < s1 - 0.2:
+        while u < s1 - 0.2 and not bare:
             p_ = self._F(f, u, D / 2)
             if k % 3 == 0:
                 self.box(f"{name}_tub", (0.3, 0.4, 0.2), (p_[0], p_[1], 0.36), ang, self.M("white"), g, bevel=0.012)
@@ -3324,6 +3507,8 @@ class Kit:
         self._runs.append({"a": self._F(f, s0)[:2], "b": self._F(f, s1)[:2], "n": ((-(f["b"][1] - f["a"][1])) / f["len"], (f["b"][0] - f["a"][0]) / f["len"]), "u": ((f["b"][0] - f["a"][0]) / f["len"], (f["b"][1] - f["a"][1]) / f["len"]), "L": L, "depth": D, "h": H,
                            "front": ((-(f["b"][1] - f["a"][1])) / f["len"], (f["b"][0] - f["a"][0]) / f["len"]), "line": self._F(f, s0)[:2], "name": name, "ang": ang, "items": []})
         self._mark_face(f, s0, s1)
+        if bare:
+            return
         # bench styling
         items = ["board", "pot", "jars", "knives", "bowls", "scale", "oil"]
         u = s0 + 0.2

@@ -166,7 +166,34 @@ function tableSeats(t: Fixture): { pos: Vec2; rot: number }[] {
  * Drop all parsed chairs (they arrive scattered/overlapping) and regenerate one tidy, tucked-in
  * cluster per table. Bar stools and everything else are kept as-is. Returns a new scene.
  */
-export function rearrangeSeating(scene: CafeScene): CafeScene {
+/**
+ * Banquettes / sofas / benches drawn against a wall: the parser is inconsistent about whether a ±90° footprint is
+ * already in world axes, so the rotation can turn a wall bench 90° out into the room. Re-derive it from the plan:
+ * the long side runs along the nearest wall, the seat faces into the room (same convention as lineAlongWalls).
+ */
+function orientWallSeating(scene: CafeScene): CafeScene {
+  const fixtures = scene.fixtures.map((f) => {
+    if (!["banquette", "sofa", "bench"].includes(String(f.category))) return f;
+    const room = scene.rooms.find((r) => r.id === f.roomId) ??
+      scene.rooms.find((r) => r.polygon.length >= 3 && pointInPoly(r.polygon, f.position[0], f.position[1]));
+    if (!room || room.polygon.length < 3) return f;
+    const L = Math.max(f.footprint[0], f.footprint[1]);
+    const D = Math.min(f.footprint[0], f.footprint[1]);
+    let best: { e: Edge; dist: number } | null = null;
+    for (const e of roomEdges(room)) {
+      const t = dot(sub(f.position, e.a), e.dir);
+      if (t < -0.2 || t > e.len + 0.2 || e.len < L * 0.6) continue;
+      const dist = Math.abs(dot(sub(f.position, e.a), e.n));
+      if (!best || dist < best.dist) best = { e, dist };
+    }
+    if (!best || best.dist > D / 2 + 0.45) return f; // free-standing: keep what the parser said
+    return { ...f, footprint: [L, D] as Vec2, rotation: facingDeg(best.e.n) };
+  });
+  return { ...scene, fixtures };
+}
+
+export function rearrangeSeating(input: CafeScene): CafeScene {
+  const scene = orientWallSeating(input);
   // The plan's own chairs are the client's layout: keep them (dropping only exact duplicates and chairs that sit
   // inside a table). Chairs are generated ONLY for tables the parser drew no seats for. (This used to drop every
   // parsed chair and regenerate them, which halved the indoor seating and scrambled the terrace.)
@@ -535,8 +562,13 @@ export function furnishScene(scene: CafeScene): Fixture[] {
   // per-room equipment (seating is handled separately by rearrangeSeating, before this runs)
   for (const room of scene.rooms) {
     if (room.polygon.length < 3) continue;
-    const have = new Set(roomFixtures(scene, room).map((f) => f.category));
+    const drawn = roomFixtures(scene, room).filter((f) => f.placedBy !== "design");
+    const have = new Set(drawn.map((f) => f.category));
     const keep = (its: Item[]) => its.filter((it) => !(SINGLETON.has(it.cat) && have.has(it.cat)));
+    // Work rooms the plan already equips (prep/kitchen legend items, a drawn toilet + basin) are built exactly
+    // as drawn: no invented hood, microwave, toaster, shelving or a second toilet. Only empty ones get a template.
+    const workRoom = ["kitchen", "preparation", "wc", "wc_disabled", "storage"].includes(room.category);
+    if (workRoom && drawn.length >= 2) continue;
 
     switch (room.category) {
       case "kitchen": {
