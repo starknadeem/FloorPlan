@@ -279,7 +279,7 @@ export const coffeeBerryScene: CafeScene = {
     { id: "mat_paving", role: "floor", preset: "paving_grey", baseColor: "#9a9690", roughness: 0.95 },
   ],
   design: {
-    style: "industrial-chic",
+    style: "coffee-berry",
     palette: [
       { name: "warm oak", hex: "#c89b63" },
       { name: "raw concrete", hex: "#cfcabf" },

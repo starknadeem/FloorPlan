@@ -86,3 +86,7 @@ write("cb_ariman", tiled(os.path.join(SRC, "_ariman_tmp.jpg"), 1.2, (0.3, 0.6), 
 os.remove(os.path.join(SRC, "_ariman_tmp.jpg"))
 # Table tops: HPL Milazza matt (terrazzo-look)
 write("cb_milazza", single(os.path.join(SRC, "milazza.jpg"), (0, 0.1, 1, 0.1 + 768 / 1229)), 0.6, 0.6, 0.15, src_id="client:HPL Millaza matt")
+
+# Bar kick plinth (μπάζα πάγκου, recessed): COEM Sassiepietre Grigio SCURO 90.6×90.6 — swatch from the COEM catalogue p.A-11
+write("cb_sassiepietre_scuro", tiled(os.path.join(SRC, "sassiepietre_grigio_scuro.jpg"), 1.812, (0.906, 0.906), grout="#4a4743"), 1.812, 0.7, 0.2, src_id="client:COEM Sassiepietre Grigio Scuro 90.6x90.6")
+

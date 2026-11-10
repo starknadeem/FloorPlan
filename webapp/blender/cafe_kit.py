@@ -74,7 +74,10 @@ CATALOG = {
     # Coffee Berry brand finishes (client schedule "CB Leo ΥΛΙΚΑ" + 7. Photo references), see gen_client_textures.py
     "cb_floor": ("cb_soulant", None, 0.8),            # Soulant gris mat 60x120: shop floor + WC floor/walls
     "cb_prep_floor": ("cb_ariman", None, 0.9),        # Ariman grey mat R10 30x60: preparation room
-    "cb_bar_tile": ("cb_sassiepietre", None, 0.75),   # COEM Sassiepietre Grigio 90.6: bar
+    "cb_bar_tile": ("cb_sassiepietre", None, 0.75),   # COEM Sassiepietre Grigio 90.6: bar counter top + front, back-bar top + splash
+    "cb_bar_tile_dark": ("cb_sassiepietre_scuro", None, 0.75),  # COEM Sassiepietre Grigio SCURO 90.6: recessed counter kick (μπάζα)
+    "cb_walnut": ("veneer_a", "#6c5448", 0.6),         # Egger H1307 ST19 Brown Warmia Walnut melamine (tone from the client's cabinet photo):
+                                                       # every bar cabinet/door/shelf, boutique, condiment, order-here, bookshelf, bench back
     "cb_milazza": ("cb_milazza", None, 0.6),          # HPL Millaza matt (outdoor table tops, stand tops)
     "cb_oak": ("oak_light", "#cfae84", 0.65),         # light sonoma-oak melamine: worktops, cabinets, bean-dispenser panel
     "cb_marble_black": ("marble", "#26292b", 0.3),    # Nero Marquina-look counter fronts + splashbacks
@@ -386,6 +389,7 @@ class Kit:
         self.mat_plain("black", "#161616", roughness=0.5)
         self.mat_plain("black_steel", "#1d1d1e", roughness=0.42, metallic=0.75)
         self.mat_plain("charcoal", "#3b3a39", roughness=0.8)
+        self.mat_plain("ral7021", "#2e3234", roughness=0.5, metallic=0.5)   # RAL 7021 black-grey (CB shopfront frames)
         self.mat_plain("steel", "#b9bcbf", roughness=0.28, metallic=1.0)
         self.mat_plain("chrome", "#e6e7e9", roughness=0.07, metallic=1.0)
         self.mat_plain("brass", "#c49a56", roughness=0.27, metallic=1.0)
@@ -733,10 +737,13 @@ class Kit:
 
     # ---------------- architecture from the plan ----------------
     def architecture(self, wall="plaster", floors=None, ceiling="plaster_white", skirting=True, downlights=True, glazing=True,
-                     ground="paving", skirt_mat="charcoal", frame_mat="black_steel", door_mat="oak_smoked", context=True):
+                     ground="paving", skirt_mat="charcoal", frame_mat="black_steel", door_mat="oak_smoked", context=True,
+                     downlight_step=2.0, downlight_style="recessed"):
         """The building shell from the plan: walls, glazed windows with frames, real doors (frames, thresholds, leaves),
         floors per room category, ceilings, roof, site ground and neighbours. floors: {category: material}.
-        ceiling: one material, or {category|room id|"default": material} like floors."""
+        ceiling: one material, or {category|room id|"default": material} like floors.
+        downlight_step: grid spacing (m) of the ceiling lights; downlight_style: "recessed" (flush lens) | "surface" (black
+        cylinder spots, e.g. the CB spec's Nova Luce Mnia GU10)."""
         S = self.scene
         floors = floors or {}
         wm = self.M(wall)
@@ -797,7 +804,9 @@ class Kit:
                 if downlights:
                     work = cat in ("preparation", "kitchen", "storage") or str(cat).startswith("wc")
                     area = self._room_area(room)
-                    self.downlights(room["polygon"], ch, coll=arch, power=(min(55.0, area * 3.2) if work else min(28.0, 6.0 + area * 2.5)), kelvin=4000 if work else 3000)
+                    k_ = (downlight_step / 2.0) ** 2   # same light per m² whatever the spacing
+                    self.downlights(room["polygon"], ch, coll=arch, step=downlight_step, style="recessed" if work else downlight_style,
+                                    power=(min(55.0, area * 3.2) if work else min(28.0, 6.0 + area * 2.5)) * k_, kelvin=4000 if work else 3000)
         self._site(ground, context, arch)
         return arch
 
@@ -1114,7 +1123,7 @@ class Kit:
             o.rotation_euler = (0, 0, math.radians(ang))
             g.objects.link(o)
 
-    def downlights(self, polygon, z, step=2.0, margin=0.75, power=28.0, coll=None, kelvin=3000):
+    def downlights(self, polygon, z, step=2.0, margin=0.75, power=28.0, coll=None, kelvin=3000, style="recessed"):
         xs = [p[0] for p in polygon]; ys = [p[1] for p in polygon]
         n = 0
         x = min(xs) + margin
@@ -1122,12 +1131,16 @@ class Kit:
             y = min(ys) + margin
             while y <= max(ys) - margin:
                 if point_in_poly(polygon, x, y):
-                    self.cyl(f"downlight", 0.055, 0.02, (x, y, z - 0.02), self.M("lens"), 16, coll=coll)
+                    if style == "surface":   # black surface-mounted spot can (GU10)
+                        self.cyl("spot_can", 0.042, 0.1, (x, y, z - 0.1), self.M("matte_black"), 18, coll=coll)
+                        self.cyl("spot_lens", 0.03, 0.004, (x, y, z - 0.104), self.M("lens"), 14, coll=coll)
+                    else:
+                        self.cyl(f"downlight", 0.055, 0.02, (x, y, z - 0.02), self.M("lens"), 16, coll=coll)
                     d = bpy.data.lights.new("downlight", "SPOT")
                     d.energy = power; d.spot_size = math.radians(88); d.spot_blend = 0.8
                     d.color = kelvin_to_rgb(kelvin); d.shadow_soft_size = 0.06
                     o = bpy.data.objects.new("downlight", d)
-                    o.location = (x, y, z - 0.03)
+                    o.location = (x, y, z - (0.11 if style == "surface" else 0.03))
                     o.rotation_euler = (0, 0, 0)  # spot points -Z
                     (coll or self.coll).objects.link(o)
                     n += 1
@@ -1193,15 +1206,15 @@ class Kit:
         self.box(f"{name}_front", (L, 0.012, z1 - z0), ((ax + bx) / 2 + nx * (depth_off - 0.004), (ay + by) / 2 + ny * (depth_off - 0.004), (z0 + z1) / 2), ang, self.M("black" if style == "slat" else mat), g, bevel=0)
         return o
 
-    def counter_run(self, a, b, depth=0.7, h=0.95, top="terrazzo", front="fluted:walnut", led_kick=True, top_thick=0.04, side=1, rail=None, name="counter"):
+    def counter_run(self, a, b, depth=0.7, h=0.95, top="terrazzo", front="fluted:walnut", led_kick=True, top_thick=0.04, side=1, rail=None, plinth="black", name="counter"):
         """Service counter from a to b. Body extends `depth` to the LEFT of a→b (side=1) or right (side=-1): the BARISTA works on
         that side; customers stand on the a→b line side. front: material or "fluted:<mat>", "slat:<mat>", "panel:<mat>".
-        rail: foot-rail metal ("brass", "chrome", "black_steel") along the customer face."""
+        rail: foot-rail metal ("brass", "chrome", "black_steel") along the customer face. plinth: the recessed kick's material."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
         g = self._collection("Joinery")
         self._runs.append({"a": a, "b": b, "n": (nx, ny), "u": (ux, uy), "L": L, "depth": depth, "h": h, "front": (-nx, -ny), "line": a, "name": name, "ang": ang, "items": []})
-        self.box(f"{name}_plinth", (L, depth - 0.1, 0.1), (cx, cy, 0.05), ang, self.M("black"), g)
+        self.box(f"{name}_plinth", (L, depth - 0.1, 0.1), (cx, cy, 0.05), ang, self.M(plinth), g)
         self.box(f"{name}_body", (L, depth - 0.02, h - 0.1 - top_thick), (cx, cy, 0.1 + (h - 0.1 - top_thick) / 2), ang, self.M("charcoal"), g, bevel=0)
         # customer face at a→b line, sits just proud of the body
         self._front(name, a, b, (-nx, -ny), -0.012 * 0 + 0.002, 0.1, h - top_thick, front, g)
@@ -1221,15 +1234,28 @@ class Kit:
             self.strip_light((ax_, ay_), (ax_ + (b[0] - a[0]), ay_ + (b[1] - a[1])), 0.085, (-nx * 0.9, -ny * 0.9, -0.5), 7.0, name=f"{name}_kick")
         return (cx, cy, h, ang)
 
-    def back_bar(self, a, b, depth=0.6, h=0.92, shelves=3, shelf_z=(1.55, 1.95, 2.35), cups=True, led=True, splash="terrazzo", body="walnut", top="terrazzo", side=1, name="backbar"):
+    def back_bar(self, a, b, depth=0.6, h=0.92, shelves=3, shelf_z=(1.55, 1.95, 2.35), cups=True, led=True, splash="terrazzo", body="walnut", top="terrazzo", side=1,
+                 plinth=None, gola=False, shelf_edge="black_steel", door_w=0.6, name="backbar"):
         """Back counter against a wall from a to b with floating shelves above, rows of cups and LED
-        strips under each shelf. The body extends `depth` to the left of a→b (side=1)."""
+        strips under each shelf. The body extends `depth` to the left of a→b (side=1).
+        plinth: material of a recessed 10 cm kick (None = body to the floor). gola: black Gola handle channel under the top and
+        door joints every door_w. shelf_edge: the shelves' front-edge material."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         g = self._collection("Joinery")
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
         self._runs.append({"a": a, "b": b, "n": (nx, ny), "u": (ux, uy), "L": L, "depth": depth, "h": h, "front": (nx, ny), "line": a, "name": name, "ang": ang, "items": []})
-        self.box(f"{name}_body", (L, depth, h - 0.04), (cx, cy, (h - 0.04) / 2), ang, self.M(body), g)
+        z0 = 0.1 if plinth else 0.0
+        if plinth:
+            self.box(f"{name}_plinth", (L, depth - 0.06, 0.1), ((a[0] + b[0]) / 2 + nx * (depth - 0.06) / 2, (a[1] + b[1]) / 2 + ny * (depth - 0.06) / 2, 0.05), ang, self.M(plinth), g)
+        self.box(f"{name}_body", (L, depth, h - 0.04 - z0), (cx, cy, z0 + (h - 0.04 - z0) / 2), ang, self.M(body), g)
         self.box(f"{name}_top", (L, depth + 0.02, 0.04), (cx, cy, h - 0.02), ang, self.M(top), g)
+        if gola:
+            fx, fy = cx + nx * (depth / 2 + 0.001), cy + ny * (depth / 2 + 0.001)
+            self.box(f"{name}_gola", (L, 0.004, 0.03), (fx, fy, h - 0.06), ang, self.M("black"), g, bevel=0)
+            n_doors = max(1, round(L / door_w))
+            for i in range(1, n_doors):
+                u = L * i / n_doors
+                self.box(f"{name}_joint", (0.004, 0.004, h - 0.08 - z0), (a[0] + ux * u + nx * (depth + 0.001), a[1] + uy * u + ny * (depth + 0.001), z0 + (h - 0.08 - z0) / 2), ang, self.M("black"), g, bevel=0)
         # splashback up to the first shelf, flush with the wall face (at a→b line)
         wx, wy = (a[0] + b[0]) / 2 + nx * 0.015, (a[1] + b[1]) / 2 + ny * 0.015
         self.box(f"{name}_splash", (L, 0.03, shelf_z[0] - h), (wx, wy, h + (shelf_z[0] - h) / 2), ang, self.M(splash), g)
@@ -1238,7 +1264,7 @@ class Kit:
             sd = 0.3
             sx, sy = (a[0] + b[0]) / 2 + nx * sd / 2, (a[1] + b[1]) / 2 + ny * sd / 2
             self.box(f"{name}_shelf{i}", (L, sd, 0.035), (sx, sy, z), ang, self.M(body), g)
-            self.box(f"{name}_shelf{i}_edge", (L, 0.015, 0.035), (sx + nx * sd / 2, sy + ny * sd / 2, z), ang, self.M("black_steel"), g)
+            self.box(f"{name}_shelf{i}_edge", (L, 0.015, 0.035), (sx + nx * sd / 2, sy + ny * sd / 2, z), ang, self.M(shelf_edge), g)
             if led:
                 self.box(f"{name}_shelf{i}_led", (L - 0.08, 0.02, 0.008), (sx + nx * (sd / 2 - 0.03), sy + ny * (sd / 2 - 0.03), z - 0.022), ang, self.M("led"), g)
                 ox, oy = nx * (sd - 0.04), ny * (sd - 0.04)
@@ -1405,32 +1431,37 @@ class Kit:
         g.objects.link(o)
         return o
 
-    def kiosk(self, at, rot=0.0, name="kiosk"):
+    def kiosk(self, at, rot=0.0, panel="walnut", trim="bronze", name="kiosk"):
         """Self-order kiosk: walnut panel with a flush screen (at = point on the wall face)."""
         g = self._collection("Equipment")
         r = math.radians(rot)
         nx, ny = -math.sin(r), math.cos(r)
-        self.box(f"{name}_panel", (0.7, 0.06, 2.4), (at[0] + nx * 0.03, at[1] + ny * 0.03, 1.2), rot, self.M("walnut"), g)
-        self.box(f"{name}_reveal", (0.74, 0.07, 0.02), (at[0] + nx * 0.03, at[1] + ny * 0.03, 2.41), rot, self.M("bronze"), g)
+        self.box(f"{name}_panel", (0.7, 0.06, 2.4), (at[0] + nx * 0.03, at[1] + ny * 0.03, 1.2), rot, self.M(panel), g)
+        self.box(f"{name}_reveal", (0.74, 0.07, 0.02), (at[0] + nx * 0.03, at[1] + ny * 0.03, 2.41), rot, self.M(trim), g)
         self.box(f"{name}_screen", (0.46, 0.02, 0.9), (at[0] + nx * 0.07, at[1] + ny * 0.07, 1.5), rot, self.M("screen"), g)
         self.box(f"{name}_tray", (0.32, 0.12, 0.08), (at[0] + nx * 0.1, at[1] + ny * 0.1, 0.9), rot, self.M("black"), g)
         return g
 
-    def shelving_wall(self, a, b, depth=0.35, h=2.4, levels=5, products=True, side=1, name="retail"):
-        """Retail / display wall from a to b: walnut carcass, black steel shelves, LED edge, products."""
+    def shelving_wall(self, a, b, depth=0.35, h=2.4, levels=5, products=True, side=1, carcass="walnut", shelf="black_steel", shelf_led=False, name="retail"):
+        """Retail / display wall from a to b: walnut carcass, black steel shelves, LED edge, products.
+        carcass / shelf: materials. shelf_led: warm LED strip under the front and back of every shelf (CB boutique units)."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         g = self._collection("Joinery")
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
-        self.box(f"{name}_back", (L, 0.03, h), ((a[0] + b[0]) / 2 + nx * 0.015, (a[1] + b[1]) / 2 + ny * 0.015, h / 2), ang, self.M("walnut"), g)
+        self.box(f"{name}_back", (L, 0.03, h), ((a[0] + b[0]) / 2 + nx * 0.015, (a[1] + b[1]) / 2 + ny * 0.015, h / 2), ang, self.M(carcass), g)
         for end in (a, b):
-            self.box(f"{name}_side", (0.03, depth, h), (end[0] + nx * depth / 2, end[1] + ny * depth / 2, h / 2), ang, self.M("walnut"), g)
-        self.box(f"{name}_topcap", (L, depth, 0.04), (cx, cy, h - 0.02), ang, self.M("walnut"), g)
+            self.box(f"{name}_side", (0.03, depth, h), (end[0] + nx * depth / 2, end[1] + ny * depth / 2, h / 2), ang, self.M(carcass), g)
+        self.box(f"{name}_topcap", (L, depth, 0.04), (cx, cy, h - 0.02), ang, self.M(carcass), g)
         self.box(f"{name}_led", (L - 0.06, 0.02, 0.01), (cx + nx * (depth / 2 - 0.03), cy + ny * (depth / 2 - 0.03), h - 0.05), ang, self.M("led"), g)
         self.strip_light((a[0] + nx * (depth - 0.05), a[1] + ny * (depth - 0.05)), (b[0] + nx * (depth - 0.05), b[1] + ny * (depth - 0.05)), h - 0.055, (-nx * 0.5, -ny * 0.5, -1), 9.0, name=f"{name}_top")
         pal = ["#b48a5a", "#2a2420", "#3e5c44", "#efe8dc", "#7a4a2c", "#c9b089", "#9b2d20"]
         for i in range(levels):
             z = 0.12 + i * (h - 0.4) / max(1, levels - 1)
-            self.box(f"{name}_shelf{i}", (L - 0.06, depth - 0.04, 0.025), (cx, cy, z), ang, self.M("black_steel"), g)
+            self.box(f"{name}_shelf{i}", (L - 0.06, depth - 0.04, 0.025), (cx, cy, z), ang, self.M(shelf), g)
+            if shelf_led and i > 0:
+                for k, off in enumerate((0.04, depth - 0.06)):
+                    self.box(f"{name}_shelf{i}_led{k}", (L - 0.1, 0.012, 0.006), (a[0] * 0.5 + b[0] * 0.5 + nx * off, a[1] * 0.5 + b[1] * 0.5 + ny * off, z - 0.016), ang, self.M("led"), g, bevel=0)
+                    self.strip_light((a[0] + nx * off, a[1] + ny * off), (b[0] + nx * off, b[1] + ny * off), z - 0.02, (0, 0, -1), 2.5, name=f"{name}_shelf{i}_{k}")
             if products:
                 self.products_on_shelf(a, b, z + 0.0125, depth, side=side, name=f"{name}_lv{i}")
         return g
@@ -1598,11 +1629,13 @@ class Kit:
             return False
         return self.place(cat, at, rot=rot, fit="stretch", footprint=fp, height=h, coll=self._collection("Seating"), name=f"{name}_top") is not None
 
-    def plan_furniture(self, seat_mat="linen:#d8cbb4", bench_mat=None, auto_chairs=True, umbrella_colour="#efe4cf"):
+    def plan_furniture(self, seat_mat="linen:#d8cbb4", bench_mat=None, auto_chairs=True, umbrella_colour="#efe4cf", bench_back=None, planter_led=False):
         """Build ALL loose seating exactly where the floor plan draws it, with the client's own furniture models:
         every table (size + position from the plan), every chair turned to face its table, every stool, every banquette
         (backed onto its wall) and terrace stand counters. Nothing is invented or moved. Tables in work rooms are skipped
-        (prep tables are worktops, plan_equipment dresses them). Call after the counters exist and before décor."""
+        (prep tables are worktops, plan_equipment dresses them). Call after the counters exist and before décor.
+        bench_back: material of a flat board back (with LED wall-wash) for indoor banquettes instead of cushions (CB: "cb_walnut").
+        planter_led: IP67 LED strip on the terrace planters (CB spec)."""
         fx = self.scene.get("fixtures", [])
         g = self._collection("Seating")
         def room_ok(x, y):
@@ -1624,6 +1657,12 @@ class Kit:
             tall = is_stand or any(k in nm for k in ("stand", "bar table", "high", "poseur")) or (f.get("height") or 0) >= 0.9
             h = 1.05 if tall else 0.75
             name = f"plan_{f.get('id', len(tables))}"
+            if self.brand and self._is_outdoor((x, y)) and "stand" in nm and abs(w - d) < 0.2 and min(w, d) >= 0.9:
+                # CB spec 4.11: the square terrace stand is a 0.86 m planter wall with a leaning ledge round an olive tree
+                self.olive_stand((x, y), size=max(w, d), h=0.86, name=name)
+                tables.append((x, y, w, d, 0.86))
+                made["stand"] += 1
+                continue
             if "round" in nm or f.get("shape") == "round":
                 self.table((x, y), shape="round", size=max(w, d), h=h, chairs=0, name=name)
             else:
@@ -1696,8 +1735,11 @@ class Kit:
                 ux, uy = -ux, -uy
             a = (bx - ux * L / 2, by - uy * L / 2); b = (bx + ux * L / 2, by + uy * L / 2)
             outdoor = self._is_outdoor((x, y))
-            self.banquette(a, b, depth=D, seat_mat=(bench_mat or "cb_oak") if outdoor else seat_mat, panel=None,
-                           back_h=0.45 if outdoor else 1.05, cushions="roll" if outdoor else "channel", name=f"plan_{f.get('id')}")
+            if not outdoor and bench_back:
+                self.banquette(a, b, depth=D, seat_mat=seat_mat, panel=None, back_h=0.46 + 0.73, cushions="panel", back_mat=bench_back, name=f"plan_{f.get('id')}")
+            else:
+                self.banquette(a, b, depth=D, seat_mat=(bench_mat or "cb_oak") if outdoor else seat_mat, panel=None,
+                               back_h=0.45 if outdoor else 1.05, cushions="roll" if outdoor else "channel", name=f"plan_{f.get('id')}")
             made["banquette"] += 1
         # terrace umbrellas and edge planters drawn on the plan
         made["umbrella"] = made["planter"] = 0
@@ -1713,7 +1755,7 @@ class Kit:
                 L = max(w, d)
                 a = (x - L / 2, y) if along_x else (x, y - L / 2)
                 b = (x + L / 2, y) if along_x else (x, y + L / 2)
-                self.planter_hedge(a, b, w=max(0.3, min(w, d)), h=0.5, hedge_h=0.35, planter="concrete", name=f"plan_{f.get('id')}")
+                self.planter_hedge(a, b, w=max(0.3, min(w, d)), h=0.5, hedge_h=0.35, planter="concrete", led=planter_led, name=f"plan_{f.get('id')}")
                 made["planter"] += 1
         print(f"PLAN_FURNITURE {made}", flush=True)
         self._furniture_done = True
@@ -1765,9 +1807,10 @@ class Kit:
         self.cyl(f"{name}_base", 0.2, 0.02, (at[0], at[1], 0), self.M("black"), 24, coll=g)
         return g
 
-    def banquette(self, a, b, depth=0.6, seat_h=0.46, back_h=1.05, panel_h=2.2, side=1, seat_mat="boucle", panel="walnut_slat", cushions="channel", name="banquette"):
+    def banquette(self, a, b, depth=0.6, seat_h=0.46, back_h=1.05, panel_h=2.2, side=1, seat_mat="boucle", panel="walnut_slat", cushions="channel", back_mat=None, name="banquette"):
         """Fixed upholstered bench along a wall a→b: plinth, plump seat, tufted back cushions, panel above (panel=None to show the wall).
-        cushions: "channel" (vertical channels) | "tufted" (square tufts) | "roll" (one long bolster). seat_mat: any fabric, e.g. "velvet:#46624f"."""
+        cushions: "channel" (vertical channels) | "tufted" (square tufts) | "roll" (one long bolster) | "panel" (flat back_mat board 5 cm
+        off the wall with an LED wall-wash behind, the CB bench). seat_mat: any fabric, e.g. "velvet:#46624f"."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         g = self._collection("Seating")
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
@@ -1779,7 +1822,12 @@ class Kit:
             u = L * (i + 0.5) / seats
             self.box(f"{name}_seat", (L / seats - 0.012, depth - 0.02, seat_h - 0.24), (a[0] + ux * u + nx * depth / 2, a[1] + uy * u + ny * depth / 2, 0.24 + (seat_h - 0.24) / 2), ang, fab, g, bevel=0.04)
         bh = back_h - seat_h
-        if cushions == "roll":
+        if cushions == "panel":
+            # flat board back (seat_mat for the seat, back_mat board) standing 5 cm off the wall, LED washing the wall behind it
+            bmat = self.M(back_mat or "cb_walnut")
+            self.box(f"{name}_back", (L, 0.018, back_h - seat_h), (a[0] * 0.5 + b[0] * 0.5 + nx * 0.059, a[1] * 0.5 + b[1] * 0.5 + ny * 0.059, seat_h + (back_h - seat_h) / 2), ang, bmat, g)
+            self.strip_light((a[0] + nx * 0.025, a[1] + ny * 0.025), (b[0] + nx * 0.025, b[1] + ny * 0.025), back_h - 0.02, (0, 0, 1), 6.0, name=f"{name}_wash")
+        elif cushions == "roll":
             self.rod(f"{name}_bolster", (a[0] + ux * 0.02 + nx * 0.2, a[1] + uy * 0.02 + ny * 0.2, seat_h + 0.11), (b[0] - ux * 0.02 + nx * 0.2, b[1] - uy * 0.02 + ny * 0.2, seat_h + 0.11), 0.09, fab, 24, g)
             self.box(f"{name}_back", (L, 0.1, bh), (a[0] * 0.5 + b[0] * 0.5 + nx * 0.05, a[1] * 0.5 + b[1] * 0.5 + ny * 0.05, seat_h + bh / 2), ang, fab, g, bevel=0.03)
         else:
@@ -2013,13 +2061,13 @@ class Kit:
         """A different floor finish inside a zone (plan polygon), e.g. checker tile at the bar."""
         return self.slab(name, polygon, 0.006, self.M(mat), coll=self._collection("Design"))
 
-    def condiment_station(self, at, rot=0.0, name="condiments"):
+    def condiment_station(self, at, rot=0.0, body="walnut", top="terrazzo", name="condiments"):
         g = self._collection("Equipment")
         r = math.radians(rot)
         def P(dx, dy, dz=0.0):
             return (at[0] + dx * math.cos(r) - dy * math.sin(r), at[1] + dx * math.sin(r) + dy * math.cos(r), dz)
-        self.box(f"{name}_body", (0.9, 0.45, 0.9), P(0, 0, 0.45), rot, self.M("walnut"), g)
-        self.box(f"{name}_top", (0.94, 0.49, 0.03), P(0, 0, 0.915), rot, self.M("terrazzo"), g)
+        self.box(f"{name}_body", (0.9, 0.45, 0.9), P(0, 0, 0.45), rot, self.M(body), g)
+        self.box(f"{name}_top", (0.94, 0.49, 0.03), P(0, 0, 0.915), rot, self.M(top), g)
         self.box(f"{name}_bin", (0.3, 0.3, 0.2), P(-0.25, 0, 0.93), rot, self.M("black"), g)
         for i in range(3):
             self.cyl(f"{name}_jar", 0.04, 0.12, P(0.05 + i * 0.12, 0.08, 0.93), self.M("display_glass"), 12, coll=g)
@@ -2032,13 +2080,18 @@ class Kit:
         self.box(f"{name}_top", (0.92, 0.47, 0.03), (at[0], at[1], 1.015), rot, self.M("black_steel"), g)
         return g
 
-    def planter_hedge(self, a, b, w=0.4, h=0.45, hedge_h=0.5, name="hedge", planter="pot"):
+    def planter_hedge(self, a, b, w=0.4, h=0.45, hedge_h=0.5, name="hedge", planter="pot", led=False):
         """Planter trough with a formally clipped boxwood hedge: a crisp rounded block of dense tiny leaves over dark interior foliage."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
         g = self._collection("Props")
         mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
         self.box(f"{name}_planter", (L, w, h), (mx, my, h / 2), ang, self.M(planter), g, bevel=0.012)
         self.box(f"{name}_rim", (L + 0.03, w + 0.03, 0.03), (mx, my, h - 0.012), ang, self.M(planter), g, bevel=0.008)
+        if led:   # warm IP67 LED strip under the rim on both long faces (CB spec 10.1.15)
+            for sgn in (1, -1):
+                ox, oy = nx * sgn * (w / 2 + 0.017), ny * sgn * (w / 2 + 0.017)
+                self.box(f"{name}_led", (L - 0.04, 0.006, 0.008), (mx + ox, my + oy, h - 0.032), ang, self.M("led"), g, bevel=0)
+                self.strip_light((a[0] + ox, a[1] + oy), (b[0] + ox, b[1] + oy), h - 0.035, (nx * sgn * 0.3, ny * sgn * 0.3, -1), 4.0, name=f"{name}_led")
         hx, hy, hz = L / 2 - 0.015, w / 2 + 0.03, hedge_h / 2
         cz = h + hz - 0.02
         self.box(f"{name}_core", (2 * hx - 0.11, 2 * hy - 0.11, 2 * hz - 0.11), (mx, my, cz), ang, self.M("leaf_dark"), g, bevel=0.04)
@@ -2452,6 +2505,74 @@ class Kit:
                 o = bpy.data.objects.new(f"fill_{room['id']}", d)
                 o.location = (cx, cy, ch - 0.08)
                 g.objects.link(o)
+        return g
+
+    def ceiling_cove(self, target=("seating_indoor", "service_counter", "entrance"), drop=0.35, mat=None, watts_per_m=8.0, inset=0.1, name="cove"):
+        """Perimeter LED cove: a 30×30 mm batten round every wall of the target rooms, `drop` below the ceiling, with a warm
+        LED strip on its underside washing down the walls (CB spec 4.02: 35 cm below the main ceiling, batten painted the
+        ceiling colour → pass mat = the ceiling paint). target: room categories or ids."""
+        g = self._collection("Lighting")
+        for room in self.scene.get("rooms", []):
+            ch = room.get("ceilingHeight") or 0
+            if ch <= 0 or not (room.get("category") in target or room.get("id") in target):
+                continue
+            poly = room["polygon"]
+            z = ch - drop
+            m = self.M(mat or "plaster_white")
+            for i in range(len(poly)):
+                p0, p1 = poly[i], poly[(i + 1) % len(poly)]
+                L = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+                if L < 0.5:
+                    continue
+                ux, uy = (p1[0] - p0[0]) / L, (p1[1] - p0[1]) / L
+                nx, ny = -uy, ux
+                mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+                if not point_in_poly(poly, mx + nx * 0.25, my + ny * 0.25):
+                    nx, ny = -nx, -ny
+                a_ = (p0[0] + ux * inset + nx * inset, p0[1] + uy * inset + ny * inset)
+                b_ = (p1[0] - ux * inset + nx * inset, p1[1] - uy * inset + ny * inset)
+                Lb = L - 2 * inset
+                ang = math.degrees(math.atan2(uy, ux))
+                cx, cy = (a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2
+                self.box(f"{name}_batten", (Lb, 0.03, 0.03), (cx, cy, z + 0.015), ang, m, g, bevel=0)
+                self.box(f"{name}_led", (Lb - 0.02, 0.012, 0.004), (cx - nx * 0.004, cy - ny * 0.004, z - 0.002), ang, self.M("led"), g, bevel=0)
+                self.strip_light(a_, b_, z - 0.005, (-nx * 0.6, -ny * 0.6, -1), watts_per_m, kelvin=3000, name=f"{name}_{room['id']}_{i}")
+        return g
+
+    def spike_spot(self, at, aim=(0.0, 0.0, 2.0), power=30.0, name="spike"):
+        """Outdoor spike spotlight in a planter (CB spec: Teres 1 outdoor GU10, black), aimed at the point `aim` (x, y, z)
+        relative to `at` (default straight up into a tree crown)."""
+        from mathutils import Vector
+        g = self._collection("Lighting")
+        d = Vector(aim).normalized() if Vector(aim).length > 1e-6 else Vector((0, 0, 1))
+        rot = d.to_track_quat("Z", "Y").to_euler()
+        base = Vector((at[0], at[1], at[2] if len(at) > 2 else 0.0))
+        self.cyl(f"{name}_stake", 0.008, 0.12, (base.x, base.y, base.z), self.M("matte_black"), 8, coll=g)
+        head = self.cyl(f"{name}_head", 0.03, 0.09, (0, 0, -0.045), self.M("matte_black"), 16, coll=g)
+        head.location = base + Vector((0, 0, 0.12)) + d * 0.045
+        head.rotation_euler = rot
+        lt = bpy.data.lights.new(name, "SPOT")
+        lt.energy = power; lt.spot_size = math.radians(36); lt.spot_blend = 0.4; lt.color = kelvin_to_rgb(2700); lt.shadow_soft_size = 0.02
+        o = bpy.data.objects.new(name, lt)
+        o.location = base + Vector((0, 0, 0.12)) + d * 0.1
+        o.rotation_euler = (-d).to_track_quat("Z", "Y").to_euler()   # spot lights shine down their local -Z
+        g.objects.link(o)
+        return g
+
+    def olive_stand(self, at, size=1.2, h=0.86, ledge=0.3, top="cb_milazza", wall="concrete", tree_h=2.6, spot=True, name="olive_stand"):
+        """Terrace stand counter (CB spec 4.11): a square perimeter wall `size` × `size`, `h` high, capped by a `ledge`-wide
+        leaning top (HPL like the tables, or fir) round a planter with an olive tree, uplit by a spike spot."""
+        g = self._collection("Props")
+        x, y = at
+        t = ledge
+        for (dx, dy, w_, d_) in ((0, (size - t) / 2, size, t), (0, -(size - t) / 2, size, t), ((size - t) / 2, 0, t, size - 2 * t), (-(size - t) / 2, 0, t, size - 2 * t)):
+            self.box(f"{name}_wall", (w_ - 0.02, d_ - 0.02, h - 0.03), (x + dx, y + dy, (h - 0.03) / 2), 0, self.M(wall), g, bevel=0.006)
+            self.box(f"{name}_top", (w_ + 0.02 if w_ == size else w_, d_ + 0.02 if d_ == size else d_ + 0.02, 0.03), (x + dx, y + dy, h - 0.015), 0, self.M(top), g, bevel=0.004)
+        self.box(f"{name}_soil", (size - 2 * t, size - 2 * t, 0.02), (x, y, h - 0.1), 0, self.M("soil"), g, bevel=0)
+        self.olive_tree((x, y), h=tree_h, name=f"{name}_olive", pot=wall)
+        if spot:
+            self.spike_spot((x + (size / 2 - t) * 0.6, y, h - 0.09), aim=(-0.25, 0, 1.0), name=f"{name}_spot")
+        self._occupied.append((x, y, size / 2))
         return g
 
     def strip_light(self, a, b, z, direction=(0, 0, -1), watts_per_m=26.0, kelvin=2900, width=0.05, name="strip"):

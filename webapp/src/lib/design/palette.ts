@@ -37,6 +37,39 @@ export interface StylePalette {
 }
 
 export const STYLE_PRESETS: Record<string, StylePalette> = {
+  // The client's brand standard, from their documents (CB Leo technical description + materials schedule):
+  // Soulant grey floor, Vivechrome 30YY 58/082 walls, 96YR 09/033 dark ceiling, Brown Warmia Walnut joinery,
+  // Sassiepietre Grigio stone bar, RAL 7021 frames. Lighting: ceiling spots + only 3 pendants, over the bench.
+  "coffee-berry": {
+    key: "coffee-berry",
+    name: "Coffee Berry Standard",
+    floor: "#9d9b96",
+    floorOutdoor: "#9a9690",
+    wall: "#d7c6ae",
+    ceiling: "#5d534d",
+    wood: "#6c5448",
+    woodDark: "#4e3b30",
+    counterTop: "#b1a9a0",
+    metal: "#2e3234",
+    stainless: "#a7acb0",
+    fabric: "#d8cbb4",
+    plantPot: "#a8a39a",
+    foliage: "#4e7a46",
+    glass: "#bcd4dd",
+    accent: "#1b1b1b",
+    light: {
+      colorTempK: 3000,
+      ambient: 0.34,
+      hemiSky: "#fff3e0",
+      hemiGround: "#b3a488",
+      hemi: 0.62,
+      dir: 1.2,
+      dirColor: "#fff1dc",
+      pendant: "#ffd49a",
+      pendantI: 6,
+      bg: "#e7e3da",
+    },
+  },
   "industrial-chic": {
     key: "industrial-chic",
     name: "Industrial Chic",
@@ -129,7 +162,25 @@ export const STYLE_PRESETS: Record<string, StylePalette> = {
   },
 };
 
-export const DEFAULT_STYLE = "industrial-chic";
+export const DEFAULT_STYLE = "coffee-berry";
+
+/** Brand rule (lighting drawing HM01): pendants hang only over the seating bench — three in a line, ~1 m apart. */
+function benchPendantSpots(fixtures: Fixture[]): { pos: Vec2; roomId?: string }[] {
+  const out: { pos: Vec2; roomId?: string }[] = [];
+  for (const f of fixtures) {
+    if (f.category !== "banquette") continue;
+    const r = ((f.rotation ?? 0) * Math.PI) / 180;
+    const along = f.footprint[0] >= f.footprint[1];
+    const L = Math.max(f.footprint[0], f.footprint[1]);
+    const ux = along ? Math.cos(r) : -Math.sin(r), uy = along ? Math.sin(r) : Math.cos(r);
+    const n = 3, gap = Math.min(1.06, (L - 0.4) / (n - 1));
+    for (let i = 0; i < n; i++) {
+      const u = (i - (n - 1) / 2) * gap;
+      out.push({ pos: [f.position[0] + ux * u, f.position[1] + uy * u], roomId: f.roomId });
+    }
+  }
+  return out.slice(0, 3);
+}
 
 /** Resolve the active palette for a scene (from its design.style), with safe fallback. */
 export function resolvePalette(scene: CafeScene): StylePalette {
@@ -155,7 +206,28 @@ export function applyStyle(scene: CafeScene, key: string): CafeScene {
   const added: Fixture[] = [];
   const addedLights: LightSource[] = [];
 
-  if (!hasPendants) {
+  if (!hasPendants && pal.key === "coffee-berry") {
+    let i = 0;
+    // ceiling spots (light only, the fixture is flush) on a ~2 m grid in every lit room…
+    for (const room of scene.rooms) {
+      if (room.ceilingHeight <= 0) continue;
+      for (const [x, y] of pendantSpotsForRoom(room.polygon)) {
+        i++;
+        addedLights.push({ id: `ltd_${i}`, type: "point", position: [x, y], mountHeight: room.ceilingHeight - 0.15,
+          intensity: pal.light.pendantI * 0.8, colorTempK: pal.light.colorTempK, source: DESIGN_SRC });
+      }
+    }
+    // …and exactly three pendants, over the bench
+    for (const { pos, roomId } of benchPendantSpots(baseFixtures)) {
+      i++;
+      const room = scene.rooms.find((r) => r.id === roomId) ?? scene.rooms.find((r) => r.polygon.length >= 3 && pointInPolygon(r.polygon, pos[0], pos[1]));
+      const mount = Math.max(1.8, (room?.ceilingHeight ?? 3.35) - 1.3);
+      added.push({ id: `fxd_pend_${i}`, name: "Pendant lamp", category: "pendant_light", roomId: room?.id ?? roomId ?? "",
+        position: pos, rotation: 0, footprint: [0.28, 0.28], height: 0.3, baseHeight: mount, placedBy: "design", confidence: 1, source: DESIGN_SRC });
+      addedLights.push({ id: `ltd_${i}`, type: "pendant", position: pos, mountHeight: mount, intensity: pal.light.pendantI,
+        colorTempK: pal.light.colorTempK, source: DESIGN_SRC });
+    }
+  } else if (!hasPendants) {
     let i = 0;
     for (const room of scene.rooms) {
       if (room.ceilingHeight <= 0) continue; // outdoor / no ceiling
