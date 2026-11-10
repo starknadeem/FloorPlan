@@ -735,7 +735,8 @@ class Kit:
     def architecture(self, wall="plaster", floors=None, ceiling="plaster_white", skirting=True, downlights=True, glazing=True,
                      ground="paving", skirt_mat="charcoal", frame_mat="black_steel", door_mat="oak_smoked", context=True):
         """The building shell from the plan: walls, glazed windows with frames, real doors (frames, thresholds, leaves),
-        floors per room category, ceilings, roof, site ground and neighbours. floors: {category: material}."""
+        floors per room category, ceilings, roof, site ground and neighbours. floors: {category: material}.
+        ceiling: one material, or {category|room id|"default": material} like floors."""
         S = self.scene
         floors = floors or {}
         wm = self.M(wall)
@@ -790,7 +791,8 @@ class Kit:
             self.slab(f"floor_{room['id']}", room["polygon"], 0.0, self.M(fm), coll=arch)
             ch = room.get("ceilingHeight") or 0
             if ch > 0:
-                self.slab(f"ceiling_{room['id']}", room["polygon"], ch, self.M(ceiling), coll=arch)
+                cm = (ceiling.get(cat) or ceiling.get(room["id"]) or ceiling.get("default", "plaster_white")) if isinstance(ceiling, dict) else ceiling
+                self.slab(f"ceiling_{room['id']}", room["polygon"], ch, self.M(cm), coll=arch)
                 self.slab(f"ceiling_roof_{room['id']}", room["polygon"], max(top, ch + 0.2), self.M("roof"), coll=arch)
                 if downlights:
                     work = cat in ("preparation", "kitchen", "storage") or str(cat).startswith("wc")
@@ -1752,6 +1754,10 @@ class Kit:
     def stool(self, at, h=0.75, name="stool", variant=None, rot=None):
         g = self._collection("Seating")
         rot = self.rng.uniform(-8, 8) if rot is None else rot
+        if variant is None and self._is_outdoor(at) and self.manifest.get("stool_outdoor"):
+            # the brand's terrace stool (Balfour bar stool, terracotta), never the upholstered indoor Pasadena
+            if self.place("stool_outdoor", at, rot=rot, coll=g, name=name) is not None:
+                return g
         if self.place("stool", at, rot=rot, coll=g, name=name, variant=variant) is not None:
             return g
         self.cyl(f"{name}_seat", 0.17, 0.05, (at[0], at[1], h - 0.05), self.M("leather"), 20, coll=g)
@@ -2325,6 +2331,28 @@ class Kit:
         """Wordmark on a wall: `at` on the wall face, `rot` = wall direction (text reads left→right along it)."""
         r = math.radians(rot)
         return self.text(name, body, (at[0] - math.sin(r) * 0.02, at[1] + math.cos(r) * 0.02, z), rot, size, self.M(mat), extrude=0.015)
+
+    def logo_sign(self, at, rot=0.0, z=2.9, width=1.4, panel=None, halo=True, name="logo"):
+        """The real Coffee Berry logo (tree over "coffee berry") as solid 12 mm built-up lettering standing 15 mm off a
+        wall face, like the shops' own signs (asset "logo", traced from webapp/public/brand/coffee-berry-logo.png by
+        build_brand_assets.py). `at` on the wall face, `rot` = wall direction with the room on its LEFT (as `sign`);
+        z = centre height; width in m (height = 0.43 × width). panel: backing panel material (e.g. the fascia band
+        "#d7c6ae" in the client's renders) or None to mount straight on the wall. halo: warm back-lit glow on the wall."""
+        g = self._collection("Design")
+        r = math.radians(rot)
+        nx, ny = -math.sin(r), math.cos(r)
+        h = width * 0.428
+        off = 0.0
+        if panel:
+            self.box(f"{name}_panel", (width * 1.25, 0.03, h * 1.45), (at[0] + nx * 0.015, at[1] + ny * 0.015, z), rot, self.M(panel), g, bevel=0.004)
+            off = 0.03
+        if halo:
+            self.place("logo_halo", (at[0] + nx * (off + 0.002), at[1] + ny * (off + 0.002)), rot=rot + 180, fit="width",
+                       footprint=(width * 1.06, 0.002), z=z - h * 1.06 / 2, coll=g, name=f"{name}_halo")
+        if self.place("logo", (at[0] + nx * (off + 0.021), at[1] + ny * (off + 0.021)), rot=rot + 180, fit="width",
+                      footprint=(width, 0.012), z=z - h / 2, coll=g, name=name) is None:
+            return self.sign("coffee berry", (at[0] + nx * off, at[1] + ny * off), rot, z, width * 0.2, "black", name)
+        return g
 
     def art(self, at, rot=0.0, z=1.6, w=0.7, h=0.95, frame="black", name="art", print_id=None):
         """Framed print with a real image and mount; `at` on the wall face, rot = wall direction. frame: any material."""

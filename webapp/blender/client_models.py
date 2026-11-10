@@ -28,7 +28,7 @@ WEB_ONLY = "--web-only" in a   # rebuild only assets/models_web twins, keep rend
 SPECS = {
     # --- furniture (Coffee Berry standard set, see clientsDocs/7. Photo references/TABLES CHAIRS)
     "cb_chair_pasadena":      dict(cat="chair",        size=(None, None, 0.80), tris=(30000, 3000), tex=(2048, 1024), fit="real"),
-    "cb_semistool_pasadena":  dict(cat="stool",        size=(None, None, 0.95), tris=(30000, 3000), tex=(2048, 1024), fit="real"),
+    "cb_semistool_pasadena":  dict(cat="stool",        size=(None, None, 0.95), tris=(30000, 3000), tex=(2048, 1024), fit="real", fwd=-90),  # model faces +X
     "cb_chair_balfour":       dict(cat="chair_outdoor", size=(None, None, 0.78), tris=(30000, 3000), tex=(2048, 1024), fit="real"),
     "cb_table_round":         dict(cat="table_round",  size=(0.80, 0.80, 0.75), tris=(10000, 2000), tex=(2048, 1024), fit="stretch"),
     "cb_table_semistand":     dict(cat="table_square", size=(0.60, 0.60, 0.92), tris=(10000, 2000), tex=(2048, 1024), fit="stretch"),
@@ -204,7 +204,7 @@ def main():
                 mn, mx = bbox(o)
                 s = mx - mn
                 entry = {"variant": name, "file": rel, "footprint": [round(s.x, 3), round(s.y, 3)],
-                         "height": round(s.z, 3), "forward_deg": 0, "fit": sp["fit"], "brand": "coffeeberry",
+                         "height": round(s.z, 3), "forward_deg": sp.get("fwd", 0), "fit": sp["fit"], "brand": "coffeeberry",
                          "style_tags": ["any"], "tris": tris, "source": "client:3DModels/" + name + ".glb",
                          "license": "client-owned",
                          "_kb": round(os.path.getsize(os.path.join(HERE, "assets", out_root, rel)) / 1024)}

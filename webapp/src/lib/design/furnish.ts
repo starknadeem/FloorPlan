@@ -185,7 +185,40 @@ export function rearrangeSeating(scene: CafeScene): CafeScene {
     if (planChairs.some((k) => Math.hypot(k.position[0] - c.position[0], k.position[1] - c.position[1]) < 0.3)) continue;
     planChairs.push(c);
   }
-  const keep = [...scene.fixtures.filter((f) => f.category !== "chair"), ...planChairs];
+  // The parser's chair rotations are unreliable (it reads position well, direction badly): turn every plan chair and
+  // stool to face the closest point of its nearest table, and give terrace chairs and stools the client's outdoor
+  // models (Balfour chair / bar stool) instead of the indoor Pasadena ones.
+  const nearestTable = (p: Vec2): Fixture | undefined => {
+    let best: Fixture | undefined, bd = 1.4;
+    for (const t of tablesAll) {
+      const [w, d] = t.footprint;
+      const dd = Math.hypot(Math.max(Math.abs(p[0] - t.position[0]) - w / 2, 0), Math.max(Math.abs(p[1] - t.position[1]) - d / 2, 0));
+      if (dd < bd) { best = t; bd = dd; }
+    }
+    return best;
+  };
+  const isOutdoorAt = (f: Fixture) => {
+    const room = scene.rooms.find((r) => r.id === f.roomId) ??
+      scene.rooms.find((r) => r.polygon.length >= 3 && pointInPoly(r.polygon, f.position[0], f.position[1]));
+    return room?.category === "seating_outdoor";
+  };
+  const aimed = (c: Fixture): Fixture => {
+    const t = nearestTable(c.position);
+    const next: Fixture = { ...c };
+    if (t) {
+      const [w, d] = t.footprint;
+      let px = Math.min(Math.max(c.position[0], t.position[0] - w / 2), t.position[0] + w / 2);
+      let py = Math.min(Math.max(c.position[1], t.position[1] - d / 2), t.position[1] + d / 2);
+      if (Math.hypot(px - c.position[0], py - c.position[1]) < 1e-3) [px, py] = t.position;
+      next.rotation = facingDeg([px - c.position[0], py - c.position[1]]);
+    }
+    if (isOutdoorAt(c)) next.modelKey = c.category === "chair" ? "cafe_chair_outdoor" : "cafe_stool_outdoor";
+    return next;
+  };
+  const keep = [
+    ...scene.fixtures.filter((f) => f.category !== "chair").map((f) => (f.category === "stool" ? aimed(f) : f)),
+    ...planChairs.map(aimed),
+  ];
   const occ: Disc[] = keep.map((f) => discOf(f.position, f.footprint[0], f.footprint[1]));
   const seats: Fixture[] = [];
   let i = 0;
@@ -215,7 +248,7 @@ export function rearrangeSeating(scene: CafeScene): CafeScene {
         footprint: [0.5, 0.5],
         height: 0.9,
         baseHeight: 0,
-        modelKey: "cafe_chair",
+        modelKey: room?.category === "seating_outdoor" ? "cafe_chair_outdoor" : "cafe_chair",
         placedBy: "design",
         confidence: 0.6,
         source: { system: 2, method: "design" },

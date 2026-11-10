@@ -97,8 +97,9 @@ export const MODEL_CATALOG: Record<string, ModelDef> = {
   cafe_chair: { url: `${C}/chair.glb`, baseRotationDeg: F, fit: "contain" },
   cafe_table: { url: `${C}/table.glb`, baseRotationDeg: 0, fit: "contain" }, // client: Omicron pedestal, 60x60 top
   // Coffee Berry (client) standard furniture — webapp/blender/client_models.py builds these from 3DModels/
-  cafe_stool: { url: `${C}/stool.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_stool: { url: `${C}/stool.glb`, baseRotationDeg: 90, fit: "contain" }, // client semistool faces +X natively, not +Z
   cafe_chair_outdoor: { url: `${C}/chairOutdoor.glb`, baseRotationDeg: F, fit: "contain" },
+  cafe_stool_outdoor: { url: `${C}/stoolOutdoor.glb`, baseRotationDeg: F, fit: "contain" }, // Balfour bar stool (build_brand_assets.py)
   cafe_table_round: { url: `${C}/tableRound.glb`, baseRotationDeg: 0, fit: "contain" },
   cafe_table_stand: { url: `${C}/tableStand.glb`, baseRotationDeg: 0, fit: "stretch" },
   cafe_counter: { url: `${C}/counter.glb`, baseRotationDeg: F, fit: "stretch" },
@@ -150,7 +151,8 @@ export const MODEL_REGISTRY: Partial<Record<FixtureCategory, ModelDef>> = {
   display_case: MODEL_CATALOG.cafe_display_case,
   cooling_case: MODEL_CATALOG.cafe_display_case,
   shelving: MODEL_CATALOG.cafe_shelving,
-  signage: MODEL_CATALOG.cafe_signage,
+  // signage: no GLB — the parametric sign (FurnitureModels "signage") carries the real Coffee Berry logo;
+  // the old cafe_signage.glb was a generic oak board with no logo.
   plant: MODEL_CATALOG.plant_potted,
   monitor: MODEL_CATALOG.tv,
   toilet: MODEL_CATALOG.toilet,
@@ -164,7 +166,7 @@ export const MODEL_REGISTRY: Partial<Record<FixtureCategory, ModelDef>> = {
 /** Which catalog keys the AI layout pass may choose from, per category. */
 export const VARIANTS_BY_CATEGORY: Partial<Record<FixtureCategory, string[]>> = {
   chair: ["cafe_chair", "cafe_chair_outdoor"],
-  stool: ["cafe_stool", "stool_bar"],
+  stool: ["cafe_stool", "cafe_stool_outdoor", "stool_bar"],
   sofa: ["sofa", "sofa_long"],
   banquette: ["bench_cushion", "sofa_long"],
   table: ["cafe_table", "cafe_table_round", "cafe_table_stand"],
@@ -183,7 +185,6 @@ export const VARIANTS_BY_CATEGORY: Partial<Record<FixtureCategory, string[]>> = 
   display_case: ["cafe_display_case"],
   cooling_case: ["cafe_display_case"],
   shelving: ["cafe_shelving", "bookcase", "cabinet"],
-  signage: ["cafe_signage"],
   plant: ["plant_potted", "plant_small"],
   monitor: ["tv"],
   toilet: ["toilet"],
@@ -191,6 +192,7 @@ export const VARIANTS_BY_CATEGORY: Partial<Record<FixtureCategory, string[]>> = 
 
 /** Resolve the model for a fixture: explicit modelKey wins, then the per-category default. */
 export function resolveModel(category: FixtureCategory, modelKey?: string): ModelDef | undefined {
+  if (category === "signage") return undefined; // always the logo sign (older scenes may carry modelKey "cafe_signage")
   if (modelKey && MODEL_CATALOG[modelKey]) return MODEL_CATALOG[modelKey];
   return MODEL_REGISTRY[category];
 }

@@ -1,27 +1,33 @@
 # Concept "Coffee Berry Standard": the client's own shop language, reproduced from their built stores and material schedule.
-# Palette: warm cream walls #efe4cf, light sonoma-oak joinery "cb_oak", black-marble counter fronts + splash "cb_marble_black",
+# Palette (client spec "CB Leo-Τεχνική Περιγραφή" §5.01): walls Vivechrome 30YY 58/082 warm beige #d7c6ae, main-hall
+#          ceiling Vivechrome 96YR 09/033 dark warm grey #5d534d, back-of-house RAL 9010 #f1ece1;
+#          light sonoma-oak joinery "cb_oak", black-marble counter fronts + splash "cb_marble_black",
 #          matte black #1b1b1b doors, frames, columns; grey Soulant 60x120 floor, Sassiepietre Grigio behind the bar.
-# Zoning: Soulant grey throughout the shop and WC, Ariman grey in prep, Sassiepietre barista lane, paving outside.
-# Light: Rockfon white ceiling with recessed downlights, black dome pendants over the bar and every table, warm 3000 K.
+# Zoning (client "CB Leo ΥΛΙΚΑ" §10.3): Soulant grey 60x120 shop floor + WC floor/walls, Ariman grey 30x60 prep floor and
+#          prep walls to 1.80 m (§2.06), Sassiepietre barista lane, paving outside.
+# Signage: the real logo (tree + wordmark) via K.logo_sign — never the plain "coffee berry" text.
+# Light: dark painted gypsum ceiling with recessed downlights, black dome pendants over the bar and every table, warm 3000 K.
 # Seating, counters and equipment follow the signed-off plan exactly (plan_furniture / plan_equipment).
 
 K = Kit(SCENE, textures_dir=TEXTURES, seed=SEED, style=STYLE)
 CEIL = 3.35
-CREAM, BLACK, OAK, MARBLE = "#efe4cf", "#1b1b1b", "cb_oak", "cb_marble_black"
+CREAM, BLACK, OAK, MARBLE = "#d7c6ae", "#1b1b1b", "cb_oak", "cb_marble_black"   # CREAM = Vivechrome 30YY 58/082
+CEIL_DARK, RAL9010 = "#5d534d", "#f1ece1"                                        # Vivechrome 96YR 09/033, RAL 9010
 
 # ---- envelope ----
-K.architecture(wall=CREAM, ceiling="rockfon", ground="paving", skirt_mat="charcoal", frame_mat="black_steel", door_mat=BLACK,
+K.architecture(wall=CREAM, ceiling={"default": CEIL_DARK, "preparation": RAL9010, "kitchen": RAL9010, "storage": RAL9010,
+                                    "staff": RAL9010, "wc": RAL9010, "wc_disabled": RAL9010}, ground="paving", skirt_mat="charcoal", frame_mat="black_steel", door_mat=BLACK,
                floors={"seating_indoor": "cb_floor", "service_counter": "cb_floor", "entrance": "cb_floor",
                        "seating_outdoor": "paving", "preparation": "cb_prep_floor", "kitchen": "cb_prep_floor",
                        "wc_disabled": "cb_floor", "wc": "cb_floor"})
 K.facade(material=CREAM, plinth="charcoal", plinth_h=0.35, cornice=BLACK, band=BLACK)
-K.sign("coffee berry", (5.4, 9.825), rot=180, z=3.45, size=0.42, mat="black", name="fascia_street")
-K.sign("coffee berry", (3.33, 23.50), rot=-46.5, z=3.1, size=0.3, mat="black", name="fascia_mall")
+K.logo_sign((5.4, 9.825), rot=180, z=3.55, width=1.6, panel=CREAM, name="fascia_street")
+K.logo_sign((3.33, 23.50), rot=-46.5, z=3.15, width=1.2, panel=CREAM, name="fascia_mall")
 
 # ---- walls ----
 K.finish_walls("seating_indoor", finish=CREAM, skirting=BLACK)
 K.finish_walls("service_counter", finish=CREAM, dado=MARBLE, dado_h=1.5, skirting=BLACK)
-K.finish_walls("preparation", finish="plaster_white", dado="tile_white", dado_h=1.8, skirting="charcoal")
+K.finish_walls("preparation", finish=RAL9010, dado="cb_prep_floor", dado_h=1.8, skirting="charcoal")   # Ariman 30x60 to 1.80 m
 K.finish_walls("wc_disabled", finish="cb_floor")
 
 # ---- floor zoning: Sassiepietre barista lane ----
@@ -50,6 +56,7 @@ for i in range(5):
     K.place("cup", (0.3, 19.0 + i * 0.1), rot=90, z=0.92, name=f"cup_stack{i}")
 for i in range(4):
     K.place("syrup", (0.35, 15.0 + i * 0.1), rot=90, z=0.92, name=f"syrup{i}")
+K.logo_sign((0.125, 21.7), rot=-90, z=2.6, width=1.0, name="logo_backbar")         # real logo over the back bar
 K.kiosk((4.33, 20.0), rot=-90)                                                     # order kiosk faces the queue
 K.shelving_wall((4.385, 16.1), (4.385, 17.9), depth=0.35, h=2.2, levels=5, name="retail")  # mall-side display
 K.condiment_station((4.215, 15.2), rot=-90)
@@ -57,7 +64,7 @@ K.condiment_station((8.6, 10.2), rot=180, name="condiments_facade")
 K.shelving_wall((1.97, 14.25), (0.62, 14.25), depth=0.32, h=1.2, levels=3, name="bookshelf")
 
 # ---- every appliance in the legend, then every table / chair / stool / banquette in the plan ----
-K.plan_equipment(skip=("carrier bar 2",), wc_finish="cb_floor", wc_dado="cb_floor", vanity="#1b1b1b", kitchen_finish="tile_white")
+K.plan_equipment(skip=("carrier bar 2",), wc_finish="cb_floor", wc_dado="cb_floor", vanity="#1b1b1b", kitchen_finish="cb_prep_floor")
 K.plan_furniture(seat_mat="linen:#d8cbb4")
 
 # ---- lighting over the plan's tables ----

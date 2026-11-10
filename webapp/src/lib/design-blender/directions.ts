@@ -15,13 +15,13 @@ export interface DesignDirection {
 /** The client's own shop standard (Coffee Berry): what every new store is built with. Default for every run. */
 export const BRAND_DIRECTION: DesignDirection = {
   id: "coffeeberry", name: "Coffee Berry Standard", style: "modern", mood: "day",
-  summary: "The client's brand: light oak + black marble bar, cream walls, black accents, grey tile",
+  summary: "The client's brand: light oak + black marble bar, warm beige walls, dark ceiling, black accents, grey tile",
   spec: `This is the CLIENT'S OWN BRAND STANDARD, taken from their built shops and material schedule: reproduce it faithfully, do not reinterpret it.
 Floors: architecture(floors=...) "cb_floor" (Soulant grey 60x120) in the shop and WC, "cb_prep_floor" (Ariman grey 30x60) in preparation/kitchen, floor_zone "cb_bar_tile" (COEM Sassiepietre Grigio 90x90) behind the bar. Terrace: "paving".
-Ceiling: "rockfon" (seamless white acoustic) everywhere with recessed downlights; WC/prep plain "plaster_white".
-Walls: warm cream "#efe4cf" in the shop; WC walls "cb_floor" tile to full height; prep "tile_white" dado. Black "#1b1b1b" for door frames, columns and the window frames.
+Ceiling (client spec §5.01): main hall painted gypsum Vivechrome 96YR 09/033 = dark warm grey "#5d534d" with recessed black downlights; back-of-house (prep, kitchen, storage, staff, WC) RAL 9010 "#f1ece1". Use architecture(ceiling={"default": "#5d534d", "preparation": "#f1ece1", ...}).
+Walls: Vivechrome 30YY 58/082 warm beige "#d7c6ae" in the shop; WC walls "cb_floor" tile to full height; prep walls "#f1ece1" with a "cb_prep_floor" (Ariman 30x60 Lab Tile) dado to 1.80 m. Black "#1b1b1b" for door frames, columns and the window frames.
 Bar: counter_run top "cb_oak", front "panel:cb_marble_black" (black marble look), black plinth, no LED kick colour other than warm white; back_bar body "cb_oak" with doors "#1b1b1b", top "cb_oak", splash "cb_marble_black" up to 1.5 m. An oak panel with the coffee-bean dispenser tubes and a wall TV menu_screen over the back bar. Black metal retail shelving_wall where the plan has retail/display.
-Light: black dome pendants with warm bulbs over the bar and tables (pendant dome_black), recessed spots, warm 3000 K. Signage: the "coffee berry" logo sign, backlit, on the facade fascia and one interior wall (K.sign("coffee berry", ...)).
+Light: black dome pendants with warm bulbs over the bar and tables (pendant dome_black), recessed spots, warm 3000 K. Signage: the REAL Coffee Berry logo (tree over the wordmark) with K.logo_sign(...) on a "#d7c6ae" panel on the facade fascia, and on one interior wall (back bar). Never K.sign("coffee berry") text: the client requires the actual logo. Its z is the CENTRE and its height is 0.43 × width: on the fascia keep the bottom at least 0.1 m above the glazing head and the top below the cornice (e.g. width 1.2 → 0.52 m tall).
 Terrace: cream umbrellas "#efe4cf" over the plan's table clusters, grey concrete planters along the edge.
 No rattan, no arches, no velvet, no neon, no gallery walls: the brand is clean, warm and simple.`,
 };
