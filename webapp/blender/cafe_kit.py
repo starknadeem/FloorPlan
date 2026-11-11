@@ -1217,10 +1217,13 @@ class Kit:
         self.box(f"{name}_front", (L, 0.012, z1 - z0), ((ax + bx) / 2 + nx * (depth_off - 0.004), (ay + by) / 2 + ny * (depth_off - 0.004), (z0 + z1) / 2), ang, self.M("black" if style == "slat" else mat), g, bevel=0)
         return o
 
-    def counter_run(self, a, b, depth=0.7, h=0.95, top="terrazzo", front="fluted:walnut", led_kick=True, top_thick=0.04, side=1, rail=None, plinth="black", name="counter"):
+    def counter_run(self, a, b, depth=0.7, h=0.95, top="terrazzo", front="fluted:walnut", led_kick=True, top_thick=0.04, side=1, rail=None, plinth="black",
+                    reveal=None, kick_trim=None, name="counter"):
         """Service counter from a to b. Body extends `depth` to the LEFT of a→b (side=1) or right (side=-1): the BARISTA works on
         that side; customers stand on the a→b line side. front: material or "fluted:<mat>", "slat:<mat>", "panel:<mat>".
-        rail: foot-rail metal ("brass", "chrome", "black_steel") along the customer face. plinth: the recessed kick's material."""
+        rail: foot-rail metal ("brass", "chrome", "black_steel") along the customer face. plinth: the recessed kick's material.
+        reveal: depth (m) below the top of a dark 12 mm shadow-gap line along the customer face (Coffee Berry bars: ~0.12).
+        kick_trim: material of a 6 cm metal skirting band fronting the kick (Coffee Berry: "copper", lit by led_kick)."""
         (ux, uy), (nx, ny), L, ang = self._along(a, b, side)
         cx, cy = (a[0] + b[0]) / 2 + nx * depth / 2, (a[1] + b[1]) / 2 + ny * depth / 2
         g = self._collection("Joinery")
@@ -1238,6 +1241,10 @@ class Kit:
                 t_ = i / max(1, max(2, int(L / 1.1) + 1) - 1)
                 x_, y_ = p0[0] + (p1[0] - p0[0]) * t_, p0[1] + (p1[1] - p0[1]) * t_
                 self.cyl(f"{name}_railpost", 0.012, 0.2, (x_, y_, 0.0), self.M(rail), 10, coll=g)
+        if reveal:
+            self.box(f"{name}_reveal", (L, 0.006, 0.012), ((a[0] + b[0]) / 2 - nx * 0.003, (a[1] + b[1]) / 2 - ny * 0.003, h - top_thick - reveal), ang, self.M("black"), g, bevel=0)
+        if kick_trim:
+            self.box(f"{name}_kicktrim", (L, 0.006, 0.06), ((a[0] + b[0]) / 2 + nx * 0.045, (a[1] + b[1]) / 2 + ny * 0.045, 0.03), ang, self.M(kick_trim), g, bevel=0.001)
         if led_kick:
             fx, fy = cx - nx * (depth / 2 - 0.05), cy - ny * (depth / 2 - 0.05)
             self.box(f"{name}_led", (L - 0.1, 0.012, 0.01), (fx, fy, 0.09), ang, self.M("led"), g, bevel=0)
@@ -1476,6 +1483,200 @@ class Kit:
             if products:
                 self.products_on_shelf(a, b, z + 0.0125, depth, side=side, name=f"{name}_lv{i}")
         return g
+
+    def brand_wall(self, a, b, z0=1.45, z1=2.9, depth=0.28, rows=3, cell=0.62, bays=(), frame="cb_walnut", panel="#ebe5dc",
+                   logo_width=None, styling=True, wash=True, name="cbwall"):
+        """The Coffee Berry back-bar wall as built in their shops (Leonberg opening photos): a walnut grid of cubbies above
+        the stone splashback, walnut-backed, a warm LED strip under every shelf and under the top, an LED wash down onto the
+        splash from the bottom rail, cubbies styled with rose-copper and dark coffee pouches, white ceramics, trailing ivy
+        and a slatted wooden lantern. a→b along the wall face, room on the LEFT (like back_bar), z0..z1 = frame bottom/top.
+        bays: ((u0, u1, kind), ...) distances along a→b; kind "logo" = flush light panel with the halo-lit logo, "open" =
+        walnut back only, no shelves (for a menu TV or the bean panel placed separately). cell: target cubby width."""
+        (ux, uy), (nx, ny), L, ang = self._along(a, b, 1)
+        g = self._collection("Joinery")
+        props = self._collection("Props")
+        H = z1 - z0
+        rail = 0.04
+        shelf_t = 0.035
+        P = lambda u, off: (a[0] + ux * u + nx * off, a[1] + uy * u + ny * off)
+        bays = sorted(bays)
+        # segments of cubbies between the special bays
+        segs, cur = [], 0.0
+        for (u0, u1, kind) in bays:
+            if u0 - cur > 0.15:
+                segs.append((cur, u0, "grid"))
+            segs.append((u0, u1, kind))
+            cur = u1
+        if L - cur > 0.15:
+            segs.append((cur, L, "grid"))
+        levels = [z0 + rail + (H - 2 * rail) * k / rows for k in range(1, rows)]   # shelf tops inside the frame
+        # outer frame: bottom rail, top cap, end stiles
+        mid = P(L / 2, depth / 2)
+        self.box(f"{name}_bottom", (L, depth, rail), (mid[0], mid[1], z0 + rail / 2), ang, self.M(frame), g)
+        self.box(f"{name}_top", (L, depth, rail), (mid[0], mid[1], z1 - rail / 2), ang, self.M(frame), g)
+        for u in (0.015, L - 0.015):
+            p = P(u, depth / 2)
+            self.box(f"{name}_stile", (0.03, depth, H), (p[0], p[1], z0 + H / 2), ang, self.M(frame), g)
+        if wash:   # warm wash down the stone splashback from under the bottom rail
+            q0, q1 = P(0.05, depth - 0.05), P(L - 0.05, depth - 0.05)
+            self.box(f"{name}_wash_led", (L - 0.1, 0.012, 0.006), (mid[0] + nx * (depth / 2 - 0.05), mid[1] + ny * (depth / 2 - 0.05), z0 - 0.004), ang, self.M("led"), g, bevel=0)
+            self.strip_light(q0, q1, z0 - 0.01, (-nx * 0.45, -ny * 0.45, -1), 6.0, kelvin=3000, name=f"{name}_wash")
+        rng = self.rng
+        cells = []
+        for (s0, s1, kind) in segs:
+            w = s1 - s0
+            pm = P((s0 + s1) / 2, 0)
+            if kind == "logo":
+                lw = logo_width or min(w * 0.82, (H - 0.2) / 0.43 * 0.8)
+                self.logo_sign(P((s0 + s1) / 2, 0), rot=ang, z=z0 + H / 2, width=lw, panel=panel, panel_size=(w - 0.03, H - 2 * rail), name=f"{name}_logo")
+                # LED under the top cap lights the panel from above, as in the shop
+                self.strip_light(P(s0 + 0.05, depth - 0.06), P(s1 - 0.05, depth - 0.06), z1 - rail - 0.01, (-nx * 0.6, -ny * 0.6, -1), 5.0, kelvin=3000, name=f"{name}_logo_led")
+                for u in (s0, s1):
+                    p = P(u, depth / 2)
+                    self.box(f"{name}_div", (0.03, depth, H), (p[0], p[1], z0 + H / 2), ang, self.M(frame), g)
+                continue
+            # walnut back panel
+            self.box(f"{name}_back", (w, 0.02, H), (pm[0] + nx * 0.01, pm[1] + ny * 0.01, z0 + H / 2), ang, self.M(frame), g)
+            if kind == "open":
+                continue
+            n = max(1, round(w / cell))
+            cw = w / n
+            for k in range(1, n):
+                p = P(s0 + k * cw, depth / 2)
+                self.box(f"{name}_div", (0.03, depth, H - 2 * rail), (p[0], p[1], z0 + H / 2), ang, self.M(frame), g)
+            sm = P((s0 + s1) / 2, depth / 2)
+            for zt in levels:
+                self.box(f"{name}_shelf", (w, depth, shelf_t), (sm[0], sm[1], zt - shelf_t / 2), ang, self.M(frame), g)
+            # LED under every shelf and under the top cap, toward the front, shining down onto the products
+            for zt in levels + [z1 - rail]:
+                zl = zt - (shelf_t if zt != z1 - rail else 0) - 0.006
+                self.box(f"{name}_led", (w - 0.06, 0.012, 0.006), (sm[0] + nx * (depth / 2 - 0.04), sm[1] + ny * (depth / 2 - 0.04), zl), ang, self.M("led"), g, bevel=0)
+                self.strip_light(P(s0 + 0.03, depth - 0.04), P(s1 - 0.03, depth - 0.04), zl - 0.004, (-nx * 0.25, -ny * 0.25, -1), 4.0, kelvin=2900, name=f"{name}_shelf")
+            floors = [z0 + rail] + levels
+            for r_, zf in enumerate(floors):
+                ch = (levels + [z1 - rail])[r_] - (shelf_t if r_ < len(levels) else 0) - zf   # clear cubby height
+                for k in range(n):
+                    cells.append((s0 + (k + 0.5) * cw, cw, zf, ch))
+        if styling:
+            self._style_cubbies(cells, depth, ang, (ux, uy), (nx, ny), a, props, name)
+        return g
+
+    def _style_cubbies(self, cells, depth, ang, u, n, a, g, name):
+        """Fill brand-wall cubbies like the Leonberg shop: mostly a standing pouch (or two), some white ceramics, ivy, a lantern."""
+        (ux, uy), (nx, ny) = u, n
+        rng = self.rng
+        copper = self.mat_plain("cb_pouch_copper", "#a7786a", roughness=0.32, metallic=0.75)
+        cocoa = self.mat_plain("cb_pouch_cocoa", "#4a372f", roughness=0.45, metallic=0.35)
+        ceramic = self.mat_plain("cb_ceramic_white", "#efeae2", roughness=0.28, coat=0.4)
+        wood = self.M("cb_walnut")
+        face = ang        # pouch width along the wall, its printed front toward the room
+        kinds = ["pouch", "pouch2", "pouch", "vase", "ivy", "pouch", "canister", "pouch2", "lantern", "pouch", "vase2", "ivy"]
+        rng.shuffle(kinds)
+        for i, (uc, cw, zf, ch) in enumerate(cells):
+            kind = kinds[i % len(kinds)]
+            cx, cy = a[0] + ux * uc + nx * depth * 0.45, a[1] + uy * uc + ny * depth * 0.45
+            tag = f"{name}_c{i}"
+            if kind in ("pouch", "pouch2"):
+                cnt = 1 if kind == "pouch" else 2
+                for j in range(cnt):
+                    du = 0 if cnt == 1 else (j - 0.5) * min(0.17, cw * 0.36)
+                    m = copper if rng.random() < 0.7 else cocoa
+                    ph = min(ch * 0.78, 0.3)
+                    self._pouch(f"{tag}_pouch{j}", (cx + ux * du, cy + uy * du, zf), face + rng.uniform(-5, 5), 0.15, 0.07, ph, m, g)
+            elif kind in ("vase", "vase2"):
+                hh = min(ch * 0.7, 0.26)
+                prof = ([(0, 0), (0.045, 0), (0.055, hh * 0.35), (0.04, hh * 0.85), (0.022, hh * 0.92), (0.024, hh), (0, hh * 0.98)] if kind == "vase"
+                        else [(0, 0), (0.06, 0), (0.065, hh * 0.55), (0.055, hh * 0.62), (0.03, hh * 0.7), (0.02, hh * 0.72), (0, hh * 0.7)])
+                self.lathe(f"{tag}_vase", prof, (cx - ux * 0.06, cy - uy * 0.06, zf), ceramic, 28, g)
+                if kind == "vase":
+                    self.lathe(f"{tag}_vase_b", [(0, 0), (0.03, 0), (0.034, 0.1), (0.016, 0.13), (0.018, 0.16), (0, 0.155)], (cx + ux * 0.08, cy + uy * 0.08, zf), ceramic, 24, g)
+            elif kind == "canister":
+                hh = min(ch * 0.65, 0.22)
+                self.cyl(f"{tag}_can", 0.05, hh, (cx, cy, zf), ceramic, 28, coll=g)
+            elif kind == "lantern":   # slatted turned-wood lantern (the "bulb" in the shop's shelves)
+                hh = min(ch * 0.6, 0.2)
+                for k in range(14):
+                    t = 2 * math.pi * k / 14
+                    bm = bmesh.new()
+                    pts = [Vector((cx + math.cos(t) * r_, cy + math.sin(t) * r_, zf + z_)) for (r_, z_) in ((0.03, 0.0), (0.075, hh * 0.35), (0.07, hh * 0.75), (0.035, hh))]
+                    self._tube_into(bm, pts, 0.006, 0.006, seg=4)
+                    self._commit_bm(bm, f"{tag}_slat{k}", "cb_walnut", g, smooth=50.0)
+                self.cyl(f"{tag}_lamp", 0.02, hh * 0.5, (cx, cy, zf + hh * 0.2), self.mat_plain("lantern_glow", "#ffcf8a", 0.5, emission="#ffb760", strength=3.0), 12, coll=g)
+            elif kind == "ivy":       # potted trailing ivy spilling over the shelf edge
+                pot = (cx + nx * 0.02, cy + ny * 0.02)
+                self.lathe(f"{tag}_pot", [(0, 0), (0.05, 0), (0.06, 0.09), (0.062, 0.1), (0, 0.095)], (pot[0], pot[1], zf), ceramic, 24, g)
+                vines, bms = bmesh.new(), [bmesh.new() for _ in range(3)]
+                top = zf + 0.1
+                for k in range(7):
+                    t = 2 * math.pi * k / 7 + rng.uniform(-0.3, 0.3)
+                    dx, dy = math.cos(t), math.sin(t)
+                    fwd = max(0.0, dx * nx + dy * ny)                       # strands toward the room fall further
+                    length = rng.uniform(0.12, 0.2) + fwd * rng.uniform(0.15, 0.35)
+                    pts = [Vector((pot[0] + dx * 0.04, pot[1] + dy * 0.04, top))]
+                    for s in range(max(4, int(length / 0.035))):
+                        lip = (pts[-1].x - cx) * nx + (pts[-1].y - cy) * ny > depth * 0.5   # past the shelf edge: hang down
+                        pts.append(pts[-1] + Vector((dx * 0.025 + nx * 0.012, dy * 0.025 + ny * 0.012, -0.04 if lip else 0.006)))
+                    self._tube_into(vines, pts, 0.002, 0.0012, seg=4)
+                    for p_ in pts[1:]:
+                        for side in (-1, 1):
+                            ld = Vector((dx * 0.5 + side * -dy * 0.7, dy * 0.5 + side * dx * 0.7, rng.uniform(-0.4, 0.3))).normalized()
+                            ll = rng.uniform(0.035, 0.055)
+                            self._leaf_into(bms[rng.randrange(3)], p_, ld, Vector((0, 0, 1)), ll, ll * 0.8)
+                self._commit_bm(vines, f"{tag}_twig", "leaf_stem", g, smooth=60.0)
+                for j, (bm, mt) in enumerate(zip(bms, ("leaf_a", "leaf_b", "leaf_c"))):
+                    self._commit_bm(bm, f"{tag}_leaf{j}", mt, g)
+                self._leaf_cloud(f"{tag}_crown", (pot[0], pot[1], top + 0.04), (0.08, 0.08, 0.05), 40, 0.045, coll=g)
+
+    def cake_dome(self, at, on=0.95, variant="carrot_cake", r=0.15, name="dome"):
+        """Glass cake dome on a footed glass stand with a cake under it (Coffee Berry counters)."""
+        g = self._collection("Props")
+        glass = self.M("display_glass")
+        self.lathe(f"{name}_stand", [(0, 0), (0.06, 0), (0.06, 0.008), (0.018, 0.02), (0.015, 0.075), (r + 0.02, 0.08), (r + 0.02, 0.09), (0, 0.09)],
+                   (at[0], at[1], on), glass, 32, g)
+        self.place("pastry", at, rot=self.rng.uniform(0, 360), variant=variant, fit="contain", footprint=(r * 1.5, r * 1.5), z=on + 0.09, coll=g, name=f"{name}_cake")
+        hh = 0.17
+        prof = [(r, 0.0), (r, 0.004)] + [(r * math.cos(t * math.pi / 2 * 0.92), 0.004 + hh * math.sin(t * math.pi / 2)) for t in (0.2, 0.4, 0.6, 0.8, 0.95)]
+        prof += [(0.022, hh + 0.004), (0.022, hh + 0.04), (0.0, hh + 0.045)]
+        self.lathe(f"{name}_glass", prof, (at[0], at[1], on + 0.09), glass, 40, g)
+        self._occupied.append((at[0], at[1], r + 0.03))
+        return g
+
+    def _pouch(self, name, base, rot, w, d, h, mat, g):
+        """Stand-up coffee pouch: gusseted bottom, flat crimped top, a one-way valve and a small printed logo label."""
+        bm = bmesh.new()
+        prof = []   # cross sections from bottom (full gusset) to the flat seal at the top
+        for t, (sw, sd) in enumerate(((1.0, 1.0), (1.0, 0.95), (0.99, 0.75), (0.98, 0.45), (0.97, 0.12), (0.97, 0.04))):
+            z = (0.0, 0.08, 0.45, 0.75, 0.93, 1.0)[t] * h
+            ring = []
+            for k in range(12):
+                th = 2 * math.pi * k / 12
+                x = math.cos(th) * w / 2 * sw
+                y = math.sin(th) * d / 2 * sd
+                x = math.copysign(min(abs(x), w / 2 * sw), x) * (1 if abs(math.cos(th)) > 0.3 else 0.98)
+                ring.append(bm.verts.new((x, y, z)))
+            prof.append(ring)
+        for r in range(len(prof) - 1):
+            for k in range(12):
+                bm.faces.new((prof[r][k], prof[r][(k + 1) % 12], prof[r + 1][(k + 1) % 12], prof[r + 1][k]))
+        bm.faces.new(list(reversed(prof[0])))
+        bm.faces.new(prof[-1])
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        crisp_smooth(bm, 60.0)
+        project_uvs(bm)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me); bm.free()
+        o = bpy.data.objects.new(name, me)
+        o.data.materials.append(mat)
+        o.location = base
+        o.rotation_euler = (0, 0, math.radians(rot))
+        g.objects.link(o)
+        r = math.radians(rot)
+        fx, fy = -math.sin(r), math.cos(r)   # local +y = the printed front (toward the room)
+        lab = self.mat_plain("cb_pouch_print", "#e9ddd2", 0.5, metallic=0.2)   # small printed tree mark + name band, as on the real bags
+        self.box(f"{name}_label", (w * 0.3, 0.002, h * 0.05), (base[0] + fx * (d * 0.36), base[1] + fy * (d * 0.36), base[2] + h * 0.42), rot, lab, g, bevel=0)
+        self.cyl(f"{name}_mark", w * 0.07, 0.002, (base[0] + fx * (d * 0.37), base[1] + fy * (d * 0.37), base[2] + h * 0.58), lab, 16, rot=(math.pi / 2, 0, r), coll=g)
+        self.cyl(f"{name}_valve", 0.009, 0.003, (base[0] + fx * (d * 0.3), base[1] + fy * (d * 0.3), base[2] + h * 0.78), self.M("black"), 10, rot=(math.pi / 2, 0, r), coll=g)
+        return o
 
     def products_on_shelf(self, a, b, z, depth=0.35, side=1, name="products"):
         """Styled merchandise along a shelf: coffee bags with labels, glass jars of beans, tins, book stacks."""
