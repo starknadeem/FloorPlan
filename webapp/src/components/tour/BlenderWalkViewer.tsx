@@ -16,59 +16,42 @@ import WalkController from "./WalkController";
 import WalkOverlay, { useTourVersion } from "./WalkOverlay";
 import GalleryButtons from "./GalleryOverlay";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { Effects, LightPool, detectQuality, SkyBackground, collectLightFixtures, isGlassLike, tuneMaterial, upgradeMirrors, type LightFixture } from "./Realism";
 
 /** Architecture and lighting objects from cafe_kit never block walking. */
 const ARCH_PREFIX = ["floor_", "ceiling_", "wall_", "glass_", "frame_", "mullion_", "skirt_", "downlight", "Sun", "fill_", "PanoCam", "Camera"];
 
-const MAX_LIGHTS = 8;
 
 /**
  * Performance: the kit exports ~1,000 small meshes and dozens of lights. three.js draws every mesh
- * separately and shades each against every light, so we (1) keep only a few of the strongest
- * point lights (pendants) and (2) merge all static meshes into one mesh per material.
+ * separately and shades each against every light, so we (1) lift every light out into a list that a
+ * small fixed pool of real lights follows around (LightPool) and (2) merge all static meshes into one
+ * mesh per material.
  */
-function optimizeModel(root: THREE.Object3D): THREE.Group {
+function optimizeModel(root: THREE.Object3D): { group: THREE.Group; fixtures: LightFixture[] } {
   root.updateMatrixWorld(true);
-  // --- lights: keep a few points, drop spots/suns (our own sun + emissive strips carry the rest)
   const lights: THREE.Light[] = [];
   root.traverse((o) => {
     if ((o as THREE.Light).isLight) lights.push(o as THREE.Light);
   });
-  const points = lights.filter((l) => (l as THREE.PointLight).isPointLight);
-  const keep = new Set<THREE.Light>();
-  // spread the kept lights out: pick by a coarse spatial hash so one room doesn't take them all
-  const seen = new Set<string>();
-  for (const l of points) {
-    const p = new THREE.Vector3();
-    l.getWorldPosition(p);
-    const key = `${Math.round(p.x / 3)}:${Math.round(p.z / 3)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    keep.add(l);
-    if (keep.size >= MAX_LIGHTS) break;
-  }
-  for (const l of lights) {
-    if (!keep.has(l)) {
-      l.removeFromParent();
-      continue;
-    }
-    l.castShadow = false;
-    l.intensity = 6;
-    l.color.offsetHSL(0, -0.1, 0.02);
-    (l as THREE.PointLight).distance = 6;
-    (l as THREE.PointLight).decay = 2;
-  }
+  const fixtures = collectLightFixtures(lights);
+  for (const l of lights) l.removeFromParent();
   // --- meshes: merge by material (+ attribute signature); floors stay identifiable for click-to-walk
   const groups = new Map<string, { mat: THREE.Material; floor: boolean; geoms: THREE.BufferGeometry[] }>();
   const meshes: THREE.Mesh[] = [];
   root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
   });
+  // mirrors become planar reflectors (the slab itself stays as the frame/back)
+  const mirrors = meshes.filter((m) => /^mirror/i.test(((Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material).name));
+  const reflectors = upgradeMirrors(root, mirrors);
+  const tuned = new Map<THREE.Material, THREE.Material>();
   for (const m of meshes) {
-    const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material;
-    for (const t of ["map", "normalMap", "roughnessMap"] as const) {
-      const tex = (mat as unknown as Record<string, THREE.Texture | null | undefined>)[t];
-      if (tex) tex.anisotropy = 8;
+    const src = (Array.isArray(m.material) ? m.material[0] : m.material) as THREE.Material;
+    let mat = tuned.get(src);
+    if (!mat) {
+      mat = tuneMaterial(src);
+      tuned.set(src, mat);
     }
     const g = m.geometry.clone();
     for (const name of Object.keys(g.attributes)) if (!["position", "normal", "uv"].includes(name)) g.deleteAttribute(name);
@@ -89,13 +72,13 @@ function optimizeModel(root: THREE.Object3D): THREE.Group {
     const merged = geoms.length === 1 ? geoms[0] : mergeGeometries(geoms, false);
     if (!merged) continue;
     const mesh = new THREE.Mesh(merged, mat);
-    mesh.castShadow = !floor;
-    mesh.receiveShadow = true;
+    mesh.castShadow = !floor && !isGlassLike(mat);
+    mesh.receiveShadow = !isGlassLike(mat);
     if (floor) mesh.userData.floor = true;
     out.add(mesh);
   }
-  for (const l of keep) out.add(l);
-  return out;
+  for (const r of reflectors) out.add(r);
+  return { group: out, fixtures };
 }
 
 function applyRoomEnvironment(gl: THREE.WebGLRenderer, scene: THREE.Scene, intensity: number) {
@@ -163,7 +146,8 @@ function DevStats({ model }: { model: THREE.Group }) {
   const gl = useThree((s) => s.gl);
   useFrame(() => {
     if (process.env.NODE_ENV === "production") return;
-    const w = window as unknown as { __cafeStats?: Record<string, number> };
+    const w = window as unknown as { __cafeStats?: Record<string, number>; __cafeModel?: THREE.Group };
+    w.__cafeModel = model;
     w.__cafeStats = {
       calls: gl.info.render.calls,
       triangles: gl.info.render.triangles,
@@ -177,32 +161,34 @@ function DevStats({ model }: { model: THREE.Group }) {
 /** Soft studio-like reflections so metal, marble and glass read as real materials instead of going black. */
 function Reflections({ evening }: { evening: boolean }) {
   const { gl, scene } = useThree();
-  useEffect(() => applyRoomEnvironment(gl, scene, evening ? 0.18 : 0.42), [gl, scene, evening]);
+  useEffect(() => applyRoomEnvironment(gl, scene, evening ? 0.2 : 0.5), [gl, scene, evening]);
   return null;
 }
 
-function SceneLights({ store, sun }: { store: TourStore; sun: [number, number, number] }) {
+function SceneLights({ store, sun, radius, shadowMap }: { store: TourStore; sun: [number, number, number]; radius: number; shadowMap: number }) {
   useTourVersion(store);
   const ev = store.evening;
+  const r = Math.min(Math.max(radius, 10), 60);
   return (
     <>
-      <ambientLight intensity={ev ? 0.1 : 0.22} />
-      <hemisphereLight color={ev ? "#6f7aa0" : "#fff1dc"} groundColor="#7a6a58" intensity={ev ? 0.15 : 0.5} />
+      <ambientLight intensity={ev ? 0.04 : 0.08} color="#ffe9d2" />
+      <hemisphereLight color={ev ? "#6f7aa0" : "#eef0f2"} groundColor="#a07c58" intensity={ev ? 0.12 : 0.34} />
       <directionalLight
         position={ev ? [-30, 7, 30] : sun}
-        intensity={ev ? 0.3 : 2.6}
-        color={ev ? "#ffa86a" : "#fff0da"}
+        intensity={ev ? 0.3 : 3.4}
+        color={ev ? "#ffa86a" : "#fff1de"}
         castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
-        shadow-camera-left={-25}
-        shadow-camera-right={25}
-        shadow-camera-top={25}
-        shadow-camera-bottom={-25}
+        shadow-mapSize-width={shadowMap}
+        shadow-mapSize-height={shadowMap}
+        shadow-camera-left={-r}
+        shadow-camera-right={r}
+        shadow-camera-top={r}
+        shadow-camera-bottom={-r}
         shadow-camera-near={1}
-        shadow-camera-far={120}
-        shadow-bias={-0.0004}
-        shadow-normalBias={0.03}
+        shadow-camera-far={150}
+        shadow-bias={-0.0003}
+        shadow-normalBias={0.025}
+        shadow-radius={4}
       />
     </>
   );
@@ -211,32 +197,44 @@ function SceneLights({ store, sun }: { store: TourStore; sun: [number, number, n
 function Inner({ glbUrl, scene, projectName, onExit }: { glbUrl: string; scene: CafeScene; projectName: string; onExit?: () => void }) {
   const gltf = useGLTF(glbUrl);
   const designId = glbUrl.match(/blender-designs\/([^/]+)\//)?.[1];
-  const { store, model, sun } = useMemo(() => {
+  // effects tier chosen once at load (Realism.detectQuality)
+  const [quality] = useState(detectQuality);
+  const { store, model, sun, radius, fixtures } = useMemo(() => {
     const sun = sunPosition(gltf.scene);
+    const bounds = new THREE.Box3().setFromObject(gltf.scene);
+    const radius = bounds.isEmpty() ? 25 : bounds.getSize(new THREE.Vector3()).setY(0).length() / 2 + 2;
     const blocks = prepareModel(gltf.scene);
     const synthetic: CafeScene = { ...scene, fixtures: blocks };
-    const model = optimizeModel(gltf.scene);
-    return { store: new TourStore(buildTourModel(synthetic)), model, sun };
+    const { group: model, fixtures } = optimizeModel(gltf.scene);
+    return { store: new TourStore(buildTourModel(synthetic)), model, sun, radius, fixtures };
   }, [gltf, scene]);
   useEffect(() => () => store.dispose(), [store]);
+  useTourVersion(store);
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __tour?: TourStore }).__tour = store;
+  }, [store]);
 
   return (
     <>
       <Canvas
         shadows
-        dpr={[1, 1.5]}
-        gl={{ antialias: true }}
+        dpr={quality === "high" ? [1, 1.5] : [1, 1]}
+        gl={{ antialias: false, powerPreference: "high-performance", stencil: false }}
+        flat
         onCreated={({ gl }) => {
-          gl.toneMapping = THREE.ACESFilmicToneMapping;
-          gl.toneMappingExposure = 1.05;
-          gl.shadowMap.type = THREE.PCFSoftShadowMap;
+          // tone mapping happens in the post stack (AgX, like the Cycles renders)
+          gl.toneMapping = THREE.NoToneMapping;
+          gl.shadowMap.type = THREE.PCFShadowMap; // r18x: PCF honours shadow.radius (PCFSoft was removed)
         }}
       >
         <Reflections evening={store.evening} />
-        <SceneLights store={store} sun={sun} />
+        <SkyBackground evening={store.evening} />
+        <SceneLights store={store} sun={sun} radius={radius} shadowMap={quality === "high" ? 4096 : 2048} />
         <primitive object={model} />
+        <LightPool fixtures={fixtures} store={store} />
         <DevStats model={model} />
         <WalkController store={store} />
+        {!(typeof window !== "undefined" && window.location.search.includes("fx=0")) && <Effects evening={store.evening} quality={quality} />}
       </Canvas>
       <WalkOverlay
         store={store}
