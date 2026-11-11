@@ -26,9 +26,10 @@ K.architecture(wall=CREAM, ceiling={"default": CEIL_DARK, "preparation": RAL9010
                        "seating_outdoor": "paving", "preparation": "cb_prep_floor", "kitchen": "cb_prep_floor",
                        "wc_disabled": "cb_floor", "wc": "cb_floor"})
 K.ceiling_cove(drop=0.35, mat=CEIL_DARK)                                         # §4.02 perimeter LED cove
-K.facade(material=CREAM, plinth="charcoal", plinth_h=0.35, cornice=BLACK, band=BLACK)
-K.logo_sign((5.4, 9.825), rot=180, z=3.55, width=1.6, panel=CREAM, name="fascia_street")
-K.logo_sign((3.33, 23.50), rot=-46.5, z=3.15, width=1.2, panel=CREAM, name="fascia_mall")
+# A03 elevations: plain shopfronts, no cornice; the street front rises to a parapet carrying the 3.60 x 1.10 sign board
+K.facade(material=CREAM, plinth="charcoal", plinth_h=0.35, cornice=None, parapet=5.6)
+K.logo_sign((5.4, 9.825), rot=180, z=4.55, width=2.10, panel=CREAM, panel_size=(3.60, 1.10), name="fascia_street")   # 210 x 90 illuminated
+K.logo_sign((3.33, 23.50), rot=-46.5, z=2.95, width=1.16, name="fascia_mall")                                       # 116 x 50 on the bulkhead
 
 # ---- walls ----
 K.finish_walls("seating_indoor", finish=CREAM, skirting=BLACK)
@@ -62,7 +63,7 @@ for i in range(5):
     K.place("cup", (0.3, 19.0 + i * 0.1), rot=90, z=0.92, name=f"cup_stack{i}")
 for i in range(4):
     K.place("syrup", (0.35, 15.0 + i * 0.1), rot=90, z=0.92, name=f"syrup{i}")
-K.logo_sign((0.125, 21.7), rot=-90, z=2.6, width=1.0, name="logo_backbar")         # real logo over the back bar
+K.logo_sign((0.125, 21.7), rot=-90, z=2.30, width=0.96, name="logo_backbar")       # A14: logo in a back-bar shelf bay
 K.kiosk((4.33, 20.0), rot=-90, panel=WALNUT, trim=BLACK)                           # §4.03 "Order here" unit
 K.shelving_wall((4.385, 16.1), (4.385, 17.9), depth=0.30, h=1.95, levels=5, carcass=WALNUT, shelf=WALNUT, shelf_led=True, name="retail")  # §4.05 coffee boutique
 K.condiment_station((4.215, 15.2), rot=-90, body=WALNUT, top=WALNUT)              # §4.04
@@ -76,10 +77,11 @@ K.plan_furniture(seat_mat="linen:#d8cbb4", bench_back=WALNUT, planter_led=True) 
 # ---- pendants: HM01 draws exactly three, over the seating bench (none over the bar or the loose tables) ----
 for i, y in enumerate((11.05, 12.1, 13.0)):
     K.pendant((1.21, y), CEIL, drop=1.3, variant="dome_black", name=f"banq_pend{i}")
+K.logo_sign((0.125, 12.1), rot=-90, z=2.39, width=1.16, name="logo_bench")          # HM01: 116 x 50 over the bench, h=2.14-2.64
 
-# ---- terrace: umbrellas over the plan's four clusters, planters on the edge ----
+# ---- terrace: A04 draws four square 4x4 m umbrellas (frame RAL 7039, NYFAN fabric), planters on the edge ----
 for i, c in enumerate(((2.14, 6.45), (6.01, 6.45), (2.14, 2.25), (6.01, 2.25))):
-    K.umbrella(c, size=3.4, h=2.55, colour=CREAM, name=f"umbrella{i}")
+    K.umbrella(c, size=3.96, h=2.5, colour=CREAM, shape="square", frame="#6c6960", name=f"umbrella{i}")
 K.planter_hedge((0.3, 0.2), (2.0, 0.2), w=0.35, h=0.5, planter="concrete", led=True, name="planter_w")
 K.planter_hedge((8.4, 0.2), (10.6, 0.2), w=0.35, h=0.5, planter="concrete", led=True, name="planter_e")
 K.planter_hedge((10.6, 0.6), (10.6, 3.4), w=0.35, h=0.5, planter="concrete", led=True, name="planter_r")

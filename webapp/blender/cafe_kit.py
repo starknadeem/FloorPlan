@@ -32,6 +32,7 @@ Typical design.py:
 import hashlib
 import json
 import math
+import re
 import os
 import random
 import sys
@@ -194,6 +195,7 @@ class Kit:
         self._runs = []       # counters/back bars, so equipment can sit on them
         self._occupied = []   # (x, y, radius) of placed equipment
         self._canopies = []   # (x, y, radius) of trees
+        self._skins = []      # (a, u, n, s0, s1, z0, z1, thick) of every build-out on a wall face (_skin)
         self._faces_cache = {}
         self._face_used = {}
         self._finished = set()     # rooms a design already finished by hand
@@ -974,6 +976,7 @@ class Kit:
         ux, uy = (bx - ax) / L, (by - ay) / L
         nx, ny = -uy, ux
         u = (s0 + s1) / 2
+        self._skins.append(((ax, ay), (ux, uy), (nx, ny), s0, s1, z0, z1, thick))
         self.box(name, (s1 - s0, thick, z1 - z0), (ax + ux * u + nx * thick / 2, ay + uy * u + ny * thick / 2, (z0 + z1) / 2), math.degrees(math.atan2(uy, ux)), mat, self._collection("Design"), bevel=bevel)
 
     def _face_rects(self, f, z0, z1):
@@ -1039,8 +1042,10 @@ class Kit:
                         self._skin(f, s0, s1, z0, z1, sm, thick=0.03, bevel=0.004)
         return len(fs)
 
-    def facade(self, material="brick_red", plinth="stone", plinth_h=0.45, cornice="plaster_white", pilasters=None, awning=None, band=None, band_z=None):
-        """Dress the street-facing envelope: cladding, plinth, cornice, optional pilasters, sign band and awnings over glazing."""
+    def facade(self, material="brick_red", plinth="stone", plinth_h=0.45, cornice="plaster_white", pilasters=None, awning=None, band=None, band_z=None, parapet=None):
+        """Dress the street-facing envelope: cladding, plinth, cornice, optional pilasters, sign band and awnings over glazing.
+        parapet: height (m) the shopfront facing an OUTDOOR room (terrace/street) rises to: a solid upstand above the roof
+        carrying the cladding and the cornice, for a high fascia sign (Coffee Berry A03: board at 4.0-5.1 m)."""
         g = self._collection("Facade")
         top = max((w["height"] for w in self.scene["walls"]), default=4.0)
         ops = self.scene.get("openings", [])
@@ -1060,6 +1065,12 @@ class Kit:
                 if (here and (here.get("ceilingHeight") or 0) > 0) or not (back and (back.get("ceilingHeight") or 0) > 0):
                     continue
                 n_faces += 1
+                ftop = top
+                outdoor = here and ((here.get("ceilingHeight") or 0) <= 0 or "outdoor" in (here.get("category") or ""))
+                if parapet and outdoor and parapet > w["height"]:
+                    ftop = parapet
+                    self.box("wall_parapet", (L + t, t, parapet - w["height"]), (mid[0], mid[1], (parapet + w["height"]) / 2),
+                             math.degrees(math.atan2(uy, ux)), self.M(material), g)
                 # outer face travelling with the outside on the left
                 pa = (ax + nx * t / 2, ay + ny * t / 2); pb = (bx + nx * t / 2, by + ny * t / 2)
                 gaps = []
@@ -1068,22 +1079,22 @@ class Kit:
                         sill = (o.get("sillHeight") or 0.9) if o["type"] == "window" else 0.0
                         g0, g1 = o["offset"], o["offset"] + o["width"]
                         gaps.append((g0, g1, sill, sill + o["height"]) if sd == 1 else (L - g1, L - g0, sill, sill + o["height"]))
-                f = {"a": pa if sd == 1 else pb, "b": pb if sd == 1 else pa, "len": L, "openings": sorted(gaps), "ceil": top}
-                for (s0, s1, z0, z1) in self._face_rects(f, plinth_h if plinth else 0.0, top):
+                f = {"a": pa if sd == 1 else pb, "b": pb if sd == 1 else pa, "len": L, "openings": sorted(gaps), "ceil": ftop}
+                for (s0, s1, z0, z1) in self._face_rects(f, plinth_h if plinth else 0.0, ftop):
                     self._skin(f, s0, s1, z0, z1, self.M(material), thick=0.03, name="wall_clad")
                 if plinth:
                     for (s0, s1, z0, z1) in self._face_rects(f, 0.0, plinth_h):
                         self._skin(f, s0, s1, z0, z1, self.M(plinth), thick=0.05, name="wall_plinth", bevel=0.006)
                 if cornice:
-                    self._skin(f, -0.1, L + 0.1, top - 0.22, top, self.M(cornice), thick=0.09, name="wall_cornice", bevel=0.012)
-                    self._skin(f, -0.05, L + 0.05, top - 0.34, top - 0.22, self.M(cornice), thick=0.055, name="wall_cornice", bevel=0.008)
+                    self._skin(f, -0.1, L + 0.1, ftop - 0.22, ftop, self.M(cornice), thick=0.09, name="wall_cornice", bevel=0.012)
+                    self._skin(f, -0.05, L + 0.05, ftop - 0.34, ftop - 0.22, self.M(cornice), thick=0.055, name="wall_cornice", bevel=0.008)
                 if band:
                     bz = band_z or (max((g[3] for g in gaps), default=2.8) + 0.06)
                     self._skin(f, 0.0, L, bz, bz + 0.62, self.M(band), thick=0.07, name="wall_band", bevel=0.01)
                 if pilasters and gaps:
                     for s_ in {round(g[0] - 0.13, 3) for g in gaps} | {round(gaps[-1][1] + 0.13, 3)}:
                         if 0.05 < s_ < L - 0.05:
-                            self._skin(f, s_ - 0.11, s_ + 0.11, 0, top - 0.34, self.M(pilasters), thick=0.08, name="wall_pilaster", bevel=0.01)
+                            self._skin(f, s_ - 0.11, s_ + 0.11, 0, ftop - 0.34, self.M(pilasters), thick=0.08, name="wall_pilaster", bevel=0.01)
                 if awning:
                     self._awning(f, gaps, awning, g)
         return n_faces
@@ -1629,7 +1640,8 @@ class Kit:
             return False
         return self.place(cat, at, rot=rot, fit="stretch", footprint=fp, height=h, coll=self._collection("Seating"), name=f"{name}_top") is not None
 
-    def plan_furniture(self, seat_mat="linen:#d8cbb4", bench_mat=None, auto_chairs=True, umbrella_colour="#efe4cf", bench_back=None, planter_led=False):
+    def plan_furniture(self, seat_mat="linen:#d8cbb4", bench_mat=None, auto_chairs=True, umbrella_colour="#efe4cf", bench_back=None, planter_led=False,
+                       umbrella_shape="auto", umbrella_frame=None):
         """Build ALL loose seating exactly where the floor plan draws it, with the client's own furniture models:
         every table (size + position from the plan), every chair turned to face its table, every stool, every banquette
         (backed onto its wall) and terrace stand counters. Nothing is invented or moved. Tables in work rooms are skipped
@@ -1765,7 +1777,13 @@ class Kit:
             x, y = f["position"][:2]
             w, d = dims(f)
             if "umbrella" in nm or "ομπρέλ" in nm:
-                self.umbrella((x, y), size=max(2.5, min(4.0, max(w, d))) if max(w, d) > 1.0 else 3.2, h=2.55, colour=umbrella_colour, name=f"plan_{f.get('id')}")
+                # the plan draws big terrace umbrellas as squares with diagonals (Coffee Berry A04: "4*4m, frame RAL 7039")
+                shape = umbrella_shape if umbrella_shape != "auto" else ("square" if (self.brand and min(w, d) >= 2.5) else "round")
+                frame = umbrella_frame or ("#6c6960" if self.brand else None)
+                if shape == "square":
+                    self.umbrella((x, y), size=min(4.0, max(w, d)) - 0.04, h=2.5, colour=umbrella_colour, shape="square", frame=frame, name=f"plan_{f.get('id')}")
+                else:
+                    self.umbrella((x, y), size=max(2.5, min(4.0, max(w, d))) if max(w, d) > 1.0 else 3.2, h=2.55, colour=umbrella_colour, frame=frame, name=f"plan_{f.get('id')}")
                 made["umbrella"] += 1
             elif f.get("category") == "plant" and ("planter" in nm or "ζαρντιν" in nm):
                 along_x = w >= d
@@ -2380,12 +2398,17 @@ class Kit:
             self._commit_bm(bm, f"{name}_leaf{i}", mt, g)
         return g
 
-    def umbrella(self, at, size=3.2, h=2.5, name="umbrella", colour="#eee8da"):
-        """Market umbrella: weighted base, timber pole, 8 ribs, fabric canopy with scalloped valance and finial."""
+    def umbrella(self, at, size=3.2, h=2.5, name="umbrella", colour="#eee8da", shape="round", frame=None):
+        """Market umbrella: weighted base, pole, ribs, fabric canopy with valance and finial. shape "round" = 8-rib
+        octagon on a timber pole; "square" = size×size canopy on 4 diagonal ribs (large terrace umbrella, e.g. 4×4 m),
+        aluminium pole and frame. frame: pole/rib colour ("#hex" or material), default smoked oak (round) / RAL 7039."""
+        if shape == "square":
+            return self._umbrella_square(at, size, h, name, colour, frame or "#6c6960")
         g = self._collection("Props")
         m = self.mat_plain(f"canvas_{colour}", colour, roughness=0.95)
+        fm = self.M(frame) if frame else self.M("oak_smoked")
         self.lathe(f"{name}_base", [(0, 0), (0.28, 0), (0.28, 0.05), (0.06, 0.09), (0.035, 0.14), (0, 0.14)], (at[0], at[1], 0), self.M("charcoal"), 32, g)
-        self.cyl(f"{name}_pole", 0.02, h + 0.1, (at[0], at[1], 0.05), self.M("oak_smoked"), 14, coll=g)
+        self.cyl(f"{name}_pole", 0.02, h + 0.1, (at[0], at[1], 0.05), fm, 14, coll=g)
         R = size / 2
         rise = 0.42
         z0 = h - 0.26
@@ -2408,7 +2431,62 @@ class Kit:
         self.lathe(f"{name}_finial", [(0.03, 0), (0.035, 0.02), (0.02, 0.05), (0.012, 0.09), (0, 0.11)], (at[0], at[1], z0 + rise), self.M("brass"), 16, g)
         for k in range(n):
             a = 2 * math.pi * k / n + 0.39
-            self.rod(f"{name}_rib", (at[0], at[1], z0 + rise - 0.04), (at[0] + math.cos(a) * R * 0.97, at[1] + math.sin(a) * R * 0.97, z0 - 0.015), 0.007, self.M("oak_smoked"), 6, g)
+            self.rod(f"{name}_rib", (at[0], at[1], z0 + rise - 0.04), (at[0] + math.cos(a) * R * 0.97, at[1] + math.sin(a) * R * 0.97, z0 - 0.015), 0.007, fm, 6, g)
+        return g
+
+    def _umbrella_square(self, at, size, h, name, colour, frame):
+        """Large square centre-pole umbrella: flat cross base plate, 60 mm aluminium pole, a shallow 4-sided pyramid
+        canopy (edges at h, apex h + 0.5) with a straight 15 cm valance, 4 ribs to the corners + 4 struts, end caps."""
+        g = self._collection("Props")
+        m = self.mat_plain(f"canvas_{colour}", colour, roughness=0.95)
+        fm = self.M(frame)
+        x, y = at
+        S = size / 2
+        rise = 0.5
+        apex = h + rise
+        # base: steel cross plate + collar
+        for k in range(2):
+            self.box(f"{name}_base", (1.0, 0.12, 0.05), (x, y, 0.025), 45 + 90 * k, fm, g, bevel=0.006)
+        self.cyl(f"{name}_collar", 0.06, 0.25, (x, y, 0.05), fm, 20, coll=g)
+        self.cyl(f"{name}_pole", 0.03, apex + 0.08, (x, y, 0.0), fm, 20, coll=g)
+        # canopy: pyramid with a few rings so it sags slightly between ribs + straight valance
+        bm = bmesh.new()
+        corners = [(-S, -S), (S, -S), (S, S), (-S, S)]
+        rings = []
+        for t, sag in ((0.02, 0.0), (0.35, 0.02), (0.7, 0.025), (1.0, 0.0)):
+            z = apex - rise * t - sag
+            ring = []
+            for i in range(4):
+                (ax, ay), (bx, by) = corners[i], corners[(i + 1) % 4]
+                for j in range(4):         # 4 segments per side: corner + 3 mid points (mid points sag)
+                    u = j / 4
+                    px, py = ax + (bx - ax) * u, ay + (by - ay) * u
+                    dz = 0.0 if j == 0 else sag * 1.5 * math.sin(math.pi * u)
+                    ring.append(bm.verts.new((x + px * t, y + py * t, z - dz)))
+            rings.append(ring)
+        n = len(rings[0])
+        for a, b in zip(rings, rings[1:]):
+            for k in range(n):
+                bm.faces.new((a[k], b[k], b[(k + 1) % n], a[(k + 1) % n]))
+        bm.faces.new(list(reversed(rings[0])))
+        edge = rings[-1]
+        for k in range(n):
+            p0, p1 = edge[k], edge[(k + 1) % n]
+            bm.faces.new((p0, bm.verts.new(p0.co + Vector((0, 0, -0.15))), bm.verts.new(p1.co + Vector((0, 0, -0.15))), p1))
+        bm.normal_update(); project_uvs(bm)
+        me = bpy.data.meshes.new(name)
+        bm.to_mesh(me); bm.free()
+        o = bpy.data.objects.new(f"{name}_canopy", me)
+        o.data.materials.append(m)
+        g.objects.link(o)
+        hub = apex - 0.06
+        for (cx, cy) in corners:
+            tip = (x + cx * 0.985, y + cy * 0.985, h - 0.02)
+            self.rod(f"{name}_rib", (x, y, hub), tip, 0.012, fm, 8, g)
+            self.rod(f"{name}_strut", (x, y, h - 0.75), (x + cx * 0.45, y + cy * 0.45, apex - rise * 0.45 - 0.08), 0.009, fm, 8, g)
+            self.cyl(f"{name}_tip", 0.018, 0.05, (tip[0], tip[1], tip[2] - 0.03), fm, 10, coll=g)
+        self.cyl(f"{name}_runner", 0.045, 0.12, (x, y, h - 0.8), fm, 16, coll=g)
+        self.lathe(f"{name}_finial", [(0.045, 0), (0.045, 0.03), (0.03, 0.07), (0, 0.09)], (x, y, apex - 0.005), fm, 16, g)
         return g
 
     def sign(self, body, at, rot=0.0, z=2.9, size=0.32, mat="walnut", name="sign"):
@@ -2416,20 +2494,42 @@ class Kit:
         r = math.radians(rot)
         return self.text(name, body, (at[0] - math.sin(r) * 0.02, at[1] + math.cos(r) * 0.02, z), rot, size, self.M(mat), extrude=0.015)
 
-    def logo_sign(self, at, rot=0.0, z=2.9, width=1.4, panel=None, halo=True, name="logo"):
+    def _buildout(self, at, n, width, z0, z1):
+        """How far (m) the finishes already built on the wall face through `at` (normal n, facing out) stand off it
+        within a width × [z0, z1] window centred on `at`. 0 on a bare face."""
+        best = 0.0
+        for (a, u, sn, s0, s1, sz0, sz1, thick) in self._skins:
+            if sn[0] * n[0] + sn[1] * n[1] < 0.99:
+                continue
+            dx, dy = at[0] - a[0], at[1] - a[1]
+            if abs(dx * sn[0] + dy * sn[1]) > 0.04:      # another (parallel) face
+                continue
+            s = dx * u[0] + dy * u[1]
+            if s + width / 2 <= s0 or s - width / 2 >= s1 or z1 <= sz0 or z0 >= sz1:
+                continue
+            best = max(best, thick)
+        return best
+
+    def logo_sign(self, at, rot=0.0, z=2.9, width=1.4, panel=None, halo=True, name="logo", panel_size=None):
         """The real Coffee Berry logo (tree over "coffee berry") as solid 12 mm built-up lettering standing 15 mm off a
         wall face, like the shops' own signs (asset "logo", traced from webapp/public/brand/coffee-berry-logo.png by
         build_brand_assets.py). `at` on the wall face, `rot` = wall direction with the room on its LEFT (as `sign`);
         z = centre height; width in m (height = 0.43 × width). panel: backing panel material (e.g. the fascia band
-        "#d7c6ae" in the client's renders) or None to mount straight on the wall. halo: warm back-lit glow on the wall."""
+        "#d7c6ae" in the client's renders) or None to mount straight on the wall; panel_size (w, h) in m, default
+        1.25 × the logo width by 1.45 × its height (Coffee Berry A03 street board: 3.60 × 1.10 for a 2.10 logo).
+        halo: warm back-lit glow on the wall."""
         g = self._collection("Design")
         r = math.radians(rot)
         nx, ny = -math.sin(r), math.cos(r)
         h = width * 0.428
-        off = 0.0
+        # stand proud of whatever already dresses this face (facade cladding, sign band, cornice, dado...): measuring from
+        # the bare wall face buried the street fascia logo inside the 70 mm facade band
+        pw, ph = panel_size or (width * 1.25, h * 1.45)
+        off = self._buildout(at, (nx, ny), pw if panel else width * 1.06, z - (ph / 2 if panel else h * 0.55), z + (ph / 2 if panel else h * 0.55))
+        base = off
         if panel:
-            self.box(f"{name}_panel", (width * 1.25, 0.03, h * 1.45), (at[0] + nx * 0.015, at[1] + ny * 0.015, z), rot, self.M(panel), g, bevel=0.004)
-            off = 0.03
+            self.box(f"{name}_panel", (pw, 0.03, ph), (at[0] + nx * (base + 0.015), at[1] + ny * (base + 0.015), z), rot, self.M(panel), g, bevel=0.004)
+            off = base + 0.03
         if halo:
             self.place("logo_halo", (at[0] + nx * (off + 0.002), at[1] + ny * (off + 0.002)), rot=rot + 180, fit="width",
                        footprint=(width * 1.06, 0.002), z=z - h * 1.06 / 2, coll=g, name=f"{name}_halo")
@@ -3839,7 +3939,9 @@ class Kit:
             if "_twig" in o.name:
                 bpy.data.objects.remove(o, do_unlink=True)
                 continue
-            if "_leaf" in o.name or "_crown" in o.name:
+            # foliage meshes are committed as "<name>_leaf<N>" (crowns: "<name>_crown_leaf<N>"); a bare "_leaf" substring
+            # also caught the shopfront door frames ("frame_leaf_<wall>") and blew their boxes into 25 m spikes on the web
+            if re.search(r"_leaf\d+(\.\d+)?$", o.name):
                 keep = 0.07 if ("hedge" in o.name or "box" in o.data.materials[0].name) else 0.2
                 bm = bmesh.new()
                 bm.from_mesh(o.data)
